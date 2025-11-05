@@ -1,0 +1,2 @@
+#PySpin
+opencv-python
