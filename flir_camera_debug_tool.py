@@ -1,3 +1,11 @@
+import os
+import warnings
+
+# Полностью отключаем предупреждения OpenMP и другие
+os.environ['KMP_WARNINGS'] = '0'
+os.environ['OMP_WARNINGS'] = '0'
+os.environ['KMP_AFFINITY'] = 'disabled'
+
 import PySpin
 import cv2
 import logging
@@ -5,24 +13,25 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 def test_flir_camera():
     system = PySpin.System.GetInstance()
     cam_list = system.GetCameras()
     num_cameras = cam_list.GetSize()
-    
+
     if num_cameras == 0:
         logger.error("No FLIR cameras found.")
         return
-    
+
     camera = cam_list.GetByIndex(0)
     camera.Init()
-    
+
     # Set camera settings
     nodemap = camera.GetNodeMap()
-    
+
     # Disable binning and decimation
-    for node_name in ['BinningHorizontal', 'BinningVertical', 
-                     'DecimationHorizontal', 'DecimationVertical']:
+    for node_name in ['BinningHorizontal', 'BinningVertical',
+                      'DecimationHorizontal', 'DecimationVertical']:
         node = PySpin.CIntegerPtr(nodemap.GetNode(node_name))
         if PySpin.IsAvailable(node) and PySpin.IsWritable(node):
             node.SetValue(1)
@@ -37,7 +46,7 @@ def test_flir_camera():
     if all(PySpin.IsAvailable(node) for node in [node_width, node_height, node_width_max, node_height_max]):
         width_max = node_width_max.GetValue()
         height_max = node_height_max.GetValue()
-        
+
         node_width.SetValue(width_max)
         node_height.SetValue(height_max)
         logger.info(f"Set resolution to maximum: {width_max}x{height_max}")
@@ -46,11 +55,12 @@ def test_flir_camera():
     width = node_width.GetValue()
     height = node_height.GetValue()
     logger.info(f"Final camera resolution: {width}x{height}")
-    
+
     camera.BeginAcquisition()
-    
+
     try:
-        for i in range(10):
+        # БЕСКОНЕЧНЫЙ ЦИКЛ вместо 10 итераций
+        while True:
             image_result = camera.GetNextImage(1000)
             if image_result.IsIncomplete():
                 logger.warning(f"Image incomplete with status: {image_result.GetImageStatus()}")
@@ -58,7 +68,7 @@ def test_flir_camera():
                 image_data = image_result.GetNDArray()
                 logger.info(f"Image shape: {image_data.shape}")
                 logger.info(f"Pixel format: {image_result.GetPixelFormat()}")
-                
+
                 # Convert image based on pixel format
                 pixel_format = image_result.GetPixelFormat()
                 if pixel_format == PySpin.PixelFormat_Mono8:
@@ -67,7 +77,7 @@ def test_flir_camera():
                     rgb_image = cv2.cvtColor(image_data, cv2.COLOR_BAYER_BG2BGR)
                 elif pixel_format == PySpin.PixelFormat_BayerGB8:
                     rgb_image = cv2.cvtColor(image_data, cv2.COLOR_BAYER_GB2BGR)
-                elif pixel_format == PySpin.PixelFormat_BayerGR8:
+                elif pixel_format == PySpin.PixelFormat_BayerGR8:  # Ваш формат!
                     rgb_image = cv2.cvtColor(image_data, cv2.COLOR_BAYER_GR2BGR)
                 elif pixel_format == PySpin.PixelFormat_BayerRG8:
                     rgb_image = cv2.cvtColor(image_data, cv2.COLOR_BAYER_RG2BGR)
@@ -77,12 +87,25 @@ def test_flir_camera():
                     rgb_image = cv2.cvtColor(image_data, cv2.COLOR_RGB2BGR)
                 else:
                     rgb_image = image_data
-                
-                cv2.imshow('FLIR Camera Test', rgb_image)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+
+                # Масштабируем изображение для отображения (слишком большое 1936x1464)
+                scale_percent = 50  # уменьшаем до 50%
+                width_scaled = int(rgb_image.shape[1] * scale_percent / 100)
+                height_scaled = int(rgb_image.shape[0] * scale_percent / 100)
+                dim = (width_scaled, height_scaled)
+                resized_image = cv2.resize(rgb_image, dim, interpolation=cv2.INTER_AREA)
+
+                cv2.imshow('FLIR Camera Test', resized_image)
+
+                # Ждем нажатия клавиши (1 мс) и проверяем 'q'
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    logger.info("Пользователь завершил программу")
                     break
-            
+
             image_result.Release()
+    except KeyboardInterrupt:
+        logger.info("Программа прервана пользователем")
     finally:
         camera.EndAcquisition()
         camera.DeInit()
@@ -90,6 +113,7 @@ def test_flir_camera():
         cam_list.Clear()
         system.ReleaseInstance()
         cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     test_flir_camera()
