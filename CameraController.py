@@ -46,7 +46,7 @@ class CameraWorker(QThread):
         self.packet_size = 9000  # Jumbo frames для GigE
         self.packet_delay = 2000  # Минимальная задержка между пакетами (нс)
         self.auto_packet_size = False  # Отключаем авто-настройку размера пакета
-    
+
     def run(self):
         """Основной цикл захвата"""
         try:
@@ -274,6 +274,114 @@ class CameraWorker(QThread):
             
         except Exception as e:
             logger.warning(f"Ошибка настройки: {e}")
+    
+    def set_gain(self, gain_value):
+        """Установка усиления (Gain) в dB"""
+        try:
+            if self.camera and self.camera.IsInitialized():
+                nodemap = self.camera.GetNodeMap()
+                gain_node = PySpin.CFloatPtr(nodemap.GetNode("Gain"))
+                
+                if PySpin.IsAvailable(gain_node) and PySpin.IsWritable(gain_node):
+                    gain_node.SetValue(gain_value)
+                    self.gain = gain_value
+                    logger.info(f"Gain изменен: {gain_value:.1f} dB")
+                    return True
+        except Exception as e:
+            logger.error(f"Ошибка установки Gain: {e}")
+        return False
+    
+    def set_gamma(self, gamma_value):
+        """Установка значения Gamma"""
+        try:
+            if self.camera and self.camera.IsInitialized():
+                nodemap = self.camera.GetNodeMap()
+                gamma_node = PySpin.CFloatPtr(nodemap.GetNode("Gamma"))
+                
+                if PySpin.IsAvailable(gamma_node) and PySpin.IsWritable(gamma_node):
+                    gamma_node.SetValue(gamma_value)
+                    self.gamma = gamma_value
+                    logger.info(f"Gamma изменена: {gamma_value}")
+                    return True
+        except Exception as e:
+            logger.error(f"Ошибка установки Gamma: {e}")
+        return False
+    
+    def set_gamma_enable(self, enable):
+        """Включение/выключение Gamma"""
+        try:
+            if self.camera and self.camera.IsInitialized():
+                nodemap = self.camera.GetNodeMap()
+                gamma_enable_node = PySpin.CBooleanPtr(nodemap.GetNode("GammaEnable"))
+                
+                if PySpin.IsAvailable(gamma_enable_node) and PySpin.IsWritable(gamma_enable_node):
+                    gamma_enable_node.SetValue(enable)
+                    self.gamma_enable = enable
+                    logger.info(f"Gamma Enable: {'Включено' if enable else 'Выключено'}")
+                    return True
+        except Exception as e:
+            logger.error(f"Ошибка установки Gamma Enable: {e}")
+        return False
+
+    def _convert_to_qimage(self, image_result):
+        """Конвертация в QImage"""
+        try:
+            image_data = image_result.GetNDArray()
+            pixel_format = image_result.GetPixelFormat()
+            
+            if image_data is None:
+                return QImage()
+            
+            # Обработка форматов
+            rgb_image = None
+            
+            if pixel_format == PySpin.PixelFormat_RGB8:
+                rgb_image = image_data
+            elif pixel_format == PySpin.PixelFormat_BGR8:
+                rgb_image = cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB)
+            elif pixel_format == PySpin.PixelFormat_Mono8:
+                rgb_image = cv2.cvtColor(image_data, cv2.COLOR_GRAY2RGB)
+            elif pixel_format == PySpin.PixelFormat_BayerRG8:
+                rgb_image = cv2.cvtColor(image_data, cv2.COLOR_BayerRG2RGB)
+            elif pixel_format == PySpin.PixelFormat_BayerBG8:
+                rgb_image = cv2.cvtColor(image_data, cv2.COLOR_BayerBG2RGB)
+            else:
+                # Пробуем обработать как монохромное
+                if len(image_data.shape) == 2:
+                    rgb_image = cv2.cvtColor(image_data, cv2.COLOR_GRAY2RGB)
+                else:
+                    return QImage()
+            
+            # Создание QImage
+            height, width, _ = rgb_image.shape
+            bytes_per_line = 3 * width
+            qimage = QImage(rgb_image.data, width, height, bytes_per_line, QImage.Format_RGB888)
+            return qimage.copy()
+            
+        except Exception as e:
+            logger.error(f"Ошибка конвертации: {e}")
+            return QImage()
+
+    def _convert_to_data_url(self, qimage):
+        """Конвертация в data URL для QML"""
+        try:
+            if qimage.isNull():
+                return ""
+            
+            # Масштабируем для уменьшения размера
+            scaled = qimage.scaled(800, 600, Qt.AspectRatioMode.KeepAspectRatio, 
+                                  Qt.TransformationMode.SmoothTransformation)
+            
+            buffer = QBuffer()
+            buffer.open(QBuffer.ReadWrite)
+            scaled.save(buffer, "JPEG", quality=60)  # Уменьшено качество для производительности
+            base64_data = base64.b64encode(buffer.data()).decode('ascii')
+            
+            return f"data:image/jpeg;base64,{base64_data}"
+            
+        except Exception as e:
+            logger.error(f"Ошибка data URL: {e}")
+            return ""
 
     def _cleanup(self):
         """Очистка ресурсов"""
@@ -298,7 +406,7 @@ class CameraWorker(QThread):
         self.running = False
         if self.isRunning():
             self.wait(2000)
-    
+
     def capture_photo(self, file_path, format="JPEG", quality=95):
         """Сохранение снимка"""
         try:
@@ -317,59 +425,38 @@ class CameraWorker(QThread):
             logger.error(f"Ошибка сохранения: {e}")
             return False
 
-    def set_display_fps(self, fps):
-        """Установка частоты обновления отображения"""
-        if fps > 0:
-            self.frame_interval = 1.0 / fps
-            logger.info(f"Частота отображения установлена: {fps} FPS")
-        
-    class CameraController(QObject):
-    """Контроллер для QML с оптимизацией отображения"""
+
+class CameraController(QObject):
+    """Упрощенный контроллер для QML с поддержкой Gain и Gamma"""
     
-    # Сигналы
     frameChanged = Signal()
     frameDataChanged = Signal()
     statusChanged = Signal()
     infoChanged = Signal()
     currentFpsChanged = Signal()
-    
-    # Сигналы для обновления изображения
-    imageUpdated = Signal(QByteArray, int, int)  # Для прямого обновления
 
     def __init__(self):
         super().__init__()
-        self._frame_data = QByteArray()
-        self._display_width = 800
-        self._display_height = 600
+        self._frame_data = ""
         self._status = "Готов"
         self._currentFps = 0.0
         self._camera_info = {
             "resolution": "1936×1464",
             "pixel_format": "Неизвестно",
             "cameras_found": "0",
-            "gain": "10.0 dB",
-            "gamma": "1.0",
-            "gamma_enabled": "Нет",
+            "gain": "15.0 dB",
+            "gamma": "0.7",
+            "gamma_enabled": "Да",
             "exposure": "20000 мкс",
-            "fps": "30.0",
-            "display_fps": "30.0"
+            "packet_size": "9000 байт",
+            "target_fps": "30"
         }
         self.worker = None
         
         # Текущие значения параметров
-        self._gain_value = 10.0
-        self._gamma_value = 1.0
-        self._gamma_enabled = False
-        self._exposure_value = 20000.0
-        self._display_fps = 30.0
-        
-        # Для отображения
-        self._pixmap = QPixmap()
-        
-        # Таймер для контроля частоты обновления QML
-        self._display_timer = QTimer()
-        self._display_timer.timeout.connect(self._update_display)
-        self._display_timer.setInterval(33)  # 30 FPS по умолчанию
+        self._gain_value = 15.0
+        self._gamma_value = 0.7
+        self._gamma_enabled = True
         
         # Обновление информации о камерах
         self._update_camera_count()
@@ -394,17 +481,13 @@ class CameraWorker(QThread):
             return
         
         self.worker = CameraWorker()
+        self.worker.frame_ready.connect(self._on_frame_ready)
         self.worker.frame_data_ready.connect(self._on_frame_data_ready)
         self.worker.status_changed.connect(self._on_status_changed)
         self.worker.error_occurred.connect(self._on_error)
         self.worker.info_updated.connect(self._on_info_updated)
         self.worker.fps_updated.connect(self._on_fps_updated)
         self.worker.start()
-        
-        # Запускаем таймер обновления отображения
-        self._display_timer.start()
-        
-        logger.info("Камера запущена с оптимизацией отображения")
 
     @Slot()
     def stop_camera(self):
@@ -414,23 +497,15 @@ class CameraWorker(QThread):
             self.worker = None
             self._status = "Остановлено"
             self.statusChanged.emit()
-            self._display_timer.stop()
-            
-        logger.info("Камера остановлена")
 
-    def _on_frame_data_ready(self, jpeg_data, width, height):
-        """Обработка JPEG данных для отображения"""
-        try:
-            if not jpeg_data.isEmpty():
-                self._frame_data = jpeg_data
-                self._display_width = width
-                self._display_height = height
-                self.frameDataChanged.emit()
-                
-                # Отправляем сигнал с сырыми данными
-                self.imageUpdated.emit(jpeg_data, width, height)
-        except Exception as e:
-            logger.error(f"Ошибка обработки данных: {e}")
+    def _on_frame_ready(self, frame):
+        """Обработка кадра"""
+        pass
+
+    def _on_frame_data_ready(self, data_url):
+        """Обработка data URL"""
+        self._frame_data = data_url
+        self.frameDataChanged.emit()
 
     def _on_status_changed(self, status):
         """Обновление статуса"""
@@ -442,7 +517,6 @@ class CameraWorker(QThread):
         logger.error(f"Ошибка: {error}")
         self._status = f"Ошибка: {error}"
         self.statusChanged.emit()
-        self._display_timer.stop()
 
     def _on_info_updated(self, key, value):
         """Обновление информации"""
@@ -453,11 +527,6 @@ class CameraWorker(QThread):
         """Обновление FPS"""
         self._currentFps = fps
         self.currentFpsChanged.emit()
-
-    def _update_display(self):
-        """Метод для обновления отображения (вызывается по таймеру)"""
-        if not self._frame_data.isEmpty():
-            self.frameDataChanged.emit()
 
     @Slot(str, str, int)
     def capture_photo(self, file_path, format, quality):
@@ -476,18 +545,6 @@ class CameraWorker(QThread):
         
         if self.worker and self.worker.isRunning():
             return self.worker.set_gain(gain_value)
-        return False
-
-    @Slot(float)
-    def set_exposure(self, exposure_value):
-        """Установка экспозиции"""
-        logger.info(f"Установка экспозиции: {exposure_value} мкс")
-        self._exposure_value = exposure_value
-        self._camera_info["exposure"] = f"{exposure_value:.0f} мкс"
-        self.infoChanged.emit()
-        
-        if self.worker and self.worker.isRunning():
-            return self.worker.set_exposure(exposure_value)
         return False
 
     @Slot(float)
@@ -514,41 +571,10 @@ class CameraWorker(QThread):
             return self.worker.set_gamma_enable(enabled)
         return False
 
-    @Slot(float)
-    def set_display_fps(self, fps):
-        """Установка частоты обновления отображения"""
-        if fps > 0 and fps <= 60:  # Ограничиваем разумными значениями
-            self._display_fps = fps
-            self._camera_info["display_fps"] = f"{fps:.1f}"
-            self.infoChanged.emit()
-            
-            # Обновляем интервал таймера
-            interval = int(1000 / fps)  # мс
-            self._display_timer.setInterval(interval)
-            
-            # Обновляем настройки в worker
-            if self.worker and self.worker.isRunning():
-                self.worker.set_display_fps(fps)
-            
-            logger.info(f"Частота отображения изменена: {fps} FPS")
-            return True
-        return False
-    
     # Свойства для QML
-    @Property(QByteArray, notify=frameDataChanged)
+    @Property(str, notify=frameDataChanged)
     def frameData(self):
-        """Сырые JPEG данные для отображения"""
         return self._frame_data
-
-    @Property(int, notify=frameDataChanged)
-    def displayWidth(self):
-        """Ширина изображения для отображения"""
-        return self._display_width
-
-    @Property(int, notify=frameDataChanged)
-    def displayHeight(self):
-        """Высота изображения для отображения"""
-        return self._display_height
 
     @Property(str, notify=statusChanged)
     def status(self):
@@ -573,16 +599,6 @@ class CameraWorker(QThread):
             self.set_gain(value)
 
     @Property(float)
-    def exposureValue(self):
-        return self._exposure_value
-    
-    @exposureValue.setter
-    def exposureValue(self, value):
-        if self._exposure_value != value:
-            self._exposure_value = value
-            self.set_exposure(value)
-
-    @Property(float)
     def gammaValue(self):
         return self._gamma_value
     
@@ -601,12 +617,3 @@ class CameraWorker(QThread):
         if self._gamma_enabled != value:
             self._gamma_enabled = value
             self.set_gamma_enable(value)
-
-    @Property(float)
-    def displayFps(self):
-        return self._display_fps
-    
-    @displayFps.setter
-    def displayFps(self, value):
-        if self._display_fps != value:
-            self.set_display_fps(value)
