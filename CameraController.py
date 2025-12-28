@@ -534,4 +534,79 @@ class CameraWorker(QThread):
             return True
         return False
     
+    # Свойства для QML
+    @Property(QByteArray, notify=frameDataChanged)
+    def frameData(self):
+        """Сырые JPEG данные для отображения"""
+        return self._frame_data
+
+    @Property(int, notify=frameDataChanged)
+    def displayWidth(self):
+        """Ширина изображения для отображения"""
+        return self._display_width
+
+    @Property(int, notify=frameDataChanged)
+    def displayHeight(self):
+        """Высота изображения для отображения"""
+        return self._display_height
+
+    @Property(str, notify=statusChanged)
+    def status(self):
+        return self._status
+
+    @Property('QVariantMap', notify=infoChanged)
+    def cameraInfo(self):
+        return self._camera_info
+
+    @Property(float, notify=currentFpsChanged)
+    def currentFps(self):
+        return self._currentFps
+
+    @Property(float)
+    def gainValue(self):
+        return self._gain_value
     
+    @gainValue.setter
+    def gainValue(self, value):
+        if self._gain_value != value:
+            self._gain_value = value
+            self.set_gain(value)
+
+    @Property(float)
+    def exposureValue(self):
+        return self._exposure_value
+    
+    @exposureValue.setter
+    def exposureValue(self, value):
+        if self._exposure_value != value:
+            self._exposure_value = value
+            self.set_exposure(value)
+
+    @Property(float)
+    def gammaValue(self):
+        return self._gamma_value
+    
+    @gammaValue.setter
+    def gammaValue(self, value):
+        if self._gamma_value != value:
+            self._gamma_value = value
+            self.set_gamma(value)
+
+    @Property(bool)
+    def gammaEnabled(self):
+        return self._gamma_enabled
+    
+    @gammaEnabled.setter
+    def gammaEnabled(self, value):
+        if self._gamma_enabled != value:
+            self._gamma_enabled = value
+            self.set_gamma_enable(value)
+
+    @Property(float)
+    def displayFps(self):
+        return self._display_fps
+    
+    @displayFps.setter
+    def displayFps(self, value):
+        if self._display_fps != value:
+            self.set_display_fps(value)
