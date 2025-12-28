@@ -298,3 +298,240 @@ class CameraWorker(QThread):
         self.running = False
         if self.isRunning():
             self.wait(2000)
+    
+    def capture_photo(self, file_path, format="JPEG", quality=95):
+        """Сохранение снимка"""
+        try:
+            with QMutexLocker(self.mutex):
+                frame = self.last_valid_frame.copy() if self.last_valid_frame else QImage()
+            
+            if frame.isNull():
+                return False
+            
+            if not file_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+                file_path += '.jpg' if format.upper() == 'JPEG' else '.png'
+            
+            return frame.save(file_path, format, quality)
+            
+        except Exception as e:
+            logger.error(f"Ошибка сохранения: {e}")
+            return False
+
+    def set_display_fps(self, fps):
+        """Установка частоты обновления отображения"""
+        if fps > 0:
+            self.frame_interval = 1.0 / fps
+            logger.info(f"Частота отображения установлена: {fps} FPS")
+        
+    class CameraController(QObject):
+    """Контроллер для QML с оптимизацией отображения"""
+    
+    # Сигналы
+    frameChanged = Signal()
+    frameDataChanged = Signal()
+    statusChanged = Signal()
+    infoChanged = Signal()
+    currentFpsChanged = Signal()
+    
+    # Сигналы для обновления изображения
+    imageUpdated = Signal(QByteArray, int, int)  # Для прямого обновления
+
+    def __init__(self):
+        super().__init__()
+        self._frame_data = QByteArray()
+        self._display_width = 800
+        self._display_height = 600
+        self._status = "Готов"
+        self._currentFps = 0.0
+        self._camera_info = {
+            "resolution": "1936×1464",
+            "pixel_format": "Неизвестно",
+            "cameras_found": "0",
+            "gain": "10.0 dB",
+            "gamma": "1.0",
+            "gamma_enabled": "Нет",
+            "exposure": "20000 мкс",
+            "fps": "30.0",
+            "display_fps": "30.0"
+        }
+        self.worker = None
+        
+        # Текущие значения параметров
+        self._gain_value = 10.0
+        self._gamma_value = 1.0
+        self._gamma_enabled = False
+        self._exposure_value = 20000.0
+        self._display_fps = 30.0
+        
+        # Для отображения
+        self._pixmap = QPixmap()
+        
+        # Таймер для контроля частоты обновления QML
+        self._display_timer = QTimer()
+        self._display_timer.timeout.connect(self._update_display)
+        self._display_timer.setInterval(33)  # 30 FPS по умолчанию
+        
+        # Обновление информации о камерах
+        self._update_camera_count()
+
+    def _update_camera_count(self):
+        """Подсчет доступных камер"""
+        try:
+            system = PySpin.System.GetInstance()
+            cam_list = system.GetCameras()
+            count = cam_list.GetSize()
+            self._camera_info["cameras_found"] = str(count)
+            cam_list.Clear()
+            system.ReleaseInstance()
+            self.infoChanged.emit()
+        except:
+            pass
+
+    @Slot()
+    def start_camera(self):
+        """Запуск камеры"""
+        if self.worker and self.worker.isRunning():
+            return
+        
+        self.worker = CameraWorker()
+        self.worker.frame_data_ready.connect(self._on_frame_data_ready)
+        self.worker.status_changed.connect(self._on_status_changed)
+        self.worker.error_occurred.connect(self._on_error)
+        self.worker.info_updated.connect(self._on_info_updated)
+        self.worker.fps_updated.connect(self._on_fps_updated)
+        self.worker.start()
+        
+        # Запускаем таймер обновления отображения
+        self._display_timer.start()
+        
+        logger.info("Камера запущена с оптимизацией отображения")
+
+    @Slot()
+    def stop_camera(self):
+        """Остановка камеры"""
+        if self.worker:
+            self.worker.stop()
+            self.worker = None
+            self._status = "Остановлено"
+            self.statusChanged.emit()
+            self._display_timer.stop()
+            
+        logger.info("Камера остановлена")
+
+    def _on_frame_data_ready(self, jpeg_data, width, height):
+        """Обработка JPEG данных для отображения"""
+        try:
+            if not jpeg_data.isEmpty():
+                self._frame_data = jpeg_data
+                self._display_width = width
+                self._display_height = height
+                self.frameDataChanged.emit()
+                
+                # Отправляем сигнал с сырыми данными
+                self.imageUpdated.emit(jpeg_data, width, height)
+        except Exception as e:
+            logger.error(f"Ошибка обработки данных: {e}")
+
+    def _on_status_changed(self, status):
+        """Обновление статуса"""
+        self._status = status
+        self.statusChanged.emit()
+
+    def _on_error(self, error):
+        """Обработка ошибки"""
+        logger.error(f"Ошибка: {error}")
+        self._status = f"Ошибка: {error}"
+        self.statusChanged.emit()
+        self._display_timer.stop()
+
+    def _on_info_updated(self, key, value):
+        """Обновление информации"""
+        self._camera_info[key] = value
+        self.infoChanged.emit()
+
+    def _on_fps_updated(self, fps):
+        """Обновление FPS"""
+        self._currentFps = fps
+        self.currentFpsChanged.emit()
+
+    def _update_display(self):
+        """Метод для обновления отображения (вызывается по таймеру)"""
+        if not self._frame_data.isEmpty():
+            self.frameDataChanged.emit()
+
+    @Slot(str, str, int)
+    def capture_photo(self, file_path, format, quality):
+        """Снимок"""
+        if self.worker and self.worker.isRunning():
+            return self.worker.capture_photo(file_path, format, quality)
+        return False
+
+    @Slot(float)
+    def set_gain(self, gain_value):
+        """Установка усиления"""
+        logger.info(f"Установка Gain: {gain_value} dB")
+        self._gain_value = gain_value
+        self._camera_info["gain"] = f"{gain_value:.1f} dB"
+        self.infoChanged.emit()
+        
+        if self.worker and self.worker.isRunning():
+            return self.worker.set_gain(gain_value)
+        return False
+
+    @Slot(float)
+    def set_exposure(self, exposure_value):
+        """Установка экспозиции"""
+        logger.info(f"Установка экспозиции: {exposure_value} мкс")
+        self._exposure_value = exposure_value
+        self._camera_info["exposure"] = f"{exposure_value:.0f} мкс"
+        self.infoChanged.emit()
+        
+        if self.worker and self.worker.isRunning():
+            return self.worker.set_exposure(exposure_value)
+        return False
+
+    @Slot(float)
+    def set_gamma(self, gamma_value):
+        """Установка значения Gamma"""
+        logger.info(f"Установка Gamma: {gamma_value}")
+        self._gamma_value = gamma_value
+        self._camera_info["gamma"] = str(gamma_value)
+        self.infoChanged.emit()
+        
+        if self.worker and self.worker.isRunning():
+            return self.worker.set_gamma(gamma_value)
+        return False
+
+    @Slot(bool)
+    def set_gamma_enable(self, enabled):
+        """Включение/выключение Gamma"""
+        logger.info(f"Gamma Enable: {'Включено' if enabled else 'Выключено'}")
+        self._gamma_enabled = enabled
+        self._camera_info["gamma_enabled"] = "Да" if enabled else "Нет"
+        self.infoChanged.emit()
+        
+        if self.worker and self.worker.isRunning():
+            return self.worker.set_gamma_enable(enabled)
+        return False
+
+    @Slot(float)
+    def set_display_fps(self, fps):
+        """Установка частоты обновления отображения"""
+        if fps > 0 and fps <= 60:  # Ограничиваем разумными значениями
+            self._display_fps = fps
+            self._camera_info["display_fps"] = f"{fps:.1f}"
+            self.infoChanged.emit()
+            
+            # Обновляем интервал таймера
+            interval = int(1000 / fps)  # мс
+            self._display_timer.setInterval(interval)
+            
+            # Обновляем настройки в worker
+            if self.worker and self.worker.isRunning():
+                self.worker.set_display_fps(fps)
+            
+            logger.info(f"Частота отображения изменена: {fps} FPS")
+            return True
+        return False
+    
+    
