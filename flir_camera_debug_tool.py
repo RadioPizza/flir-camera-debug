@@ -1,3 +1,11 @@
+import os
+import warnings 
+
+# Полностью отключаем предупреждения OpenMP и другие
+os.environ['KMP_WARNINGS'] = '0'
+os.environ['OMP_WARNINGS'] = '0'
+os.environ['KMP_AFFINITY'] = 'disabled'
+
 import PySpin
 import cv2
 import logging
@@ -50,7 +58,8 @@ def test_flir_camera():
     camera.BeginAcquisition()
     
     try:
-        for i in range(10):
+        # БЕСКОНЕЧНЫЙ ЦИКЛ вместо 10 итераций
+        while True:
             image_result = camera.GetNextImage(1000)
             if image_result.IsIncomplete():
                 logger.warning(f"Image incomplete with status: {image_result.GetImageStatus()}")
@@ -77,12 +86,24 @@ def test_flir_camera():
                     rgb_image = cv2.cvtColor(image_data, cv2.COLOR_RGB2BGR)
                 else:
                     rgb_image = image_data
-                
+                    
+                scale_percent = 50  # уменьшаем до 50%
+                width_scaled = int(rgb_image.shape[1] * scale_percent / 100)
+                height_scaled = int(rgb_image.shape[0] * scale_percent / 100)
+                dim = (width_scaled, height_scaled)
+                resized_image = cv2.resize(rgb_image, dim, interpolation=cv2.INTER_AREA)
+
                 cv2.imshow('FLIR Camera Test', rgb_image)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                # Ждем нажатия клавиши (1 мс) и проверяем 'q'
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    logger.info("Пользователь завершил программу")
                     break
             
             image_result.Release()
+
+    except KeyboardInterrupt:
+        logger.info("Программа прервана пользователем")
     finally:
         camera.EndAcquisition()
         camera.DeInit()
