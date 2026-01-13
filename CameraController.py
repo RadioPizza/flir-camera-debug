@@ -45,13 +45,11 @@ class CameraWorker(QThread):
         
         # Настройки по умолчанию
         self.target_fps = 30
-        self.exposure_time = 20000 
+        self.exposure_time = 20000.0 # [ВАЖНО] Исходное значение 20000
         self.gain = 15.0
-        # [НОВОЕ] Баланс белого (Ratio для красного канала)
-        self.wb_red = 1.33 
+        self.wb_red = 1.5 
         
         self.packet_size = 9000
-        self.packet_delay = 2000
 
     def run(self):
         try:
@@ -80,13 +78,11 @@ class CameraWorker(QThread):
             while self.running:
                 try:
                     image_result = self.camera.GetNextImage(2000)
-                    
                     if image_result.IsIncomplete():
                         image_result.Release()
                         continue
 
                     qimage = self._convert_to_qimage(image_result)
-                    
                     if not qimage.isNull():
                         self.frame_ready.emit(qimage)
                         fps_counter += 1
@@ -115,57 +111,38 @@ class CameraWorker(QThread):
         try:
             nodemap = self.camera.GetNodeMap()
             
-            # 1. Packet Size
+            # Packet Size & Buffer (Оптимизация)
             try:
                 tl_stream_nodemap = self.camera.GetTLStreamNodeMap()
-                packet_size_node = PySpin.CIntegerPtr(tl_stream_nodemap.GetNode("StreamPacketSize"))
-                if PySpin.IsAvailable(packet_size_node) and PySpin.IsWritable(packet_size_node):
-                    packet_size_node.SetValue(min(packet_size_node.GetMax(), self.packet_size))
-            except: pass
-
-            # 2. Buffer Handling
-            try:
-                tl_stream_nodemap = self.camera.GetTLStreamNodeMap()
+                packet_node = PySpin.CIntegerPtr(tl_stream_nodemap.GetNode("StreamPacketSize"))
+                if PySpin.IsAvailable(packet_node) and PySpin.IsWritable(packet_node):
+                    packet_node.SetValue(min(packet_node.GetMax(), self.packet_size))
+                
                 buffer_mode = PySpin.CEnumerationPtr(tl_stream_nodemap.GetNode("StreamBufferHandlingMode"))
                 if PySpin.IsAvailable(buffer_mode) and PySpin.IsWritable(buffer_mode):
-                    entry = buffer_mode.GetEntryByName("NewestOnly")
-                    if PySpin.IsAvailable(entry):
-                        buffer_mode.SetIntValue(entry.GetValue())
+                    buffer_mode.SetIntValue(buffer_mode.GetEntryByName("NewestOnly").GetValue())
             except: pass
 
-            # 3. Exposure (Fixed 20ms)
-            try:
-                exposure_auto = PySpin.CEnumerationPtr(nodemap.GetNode("ExposureAuto"))
-                if PySpin.IsAvailable(exposure_auto) and PySpin.IsWritable(exposure_auto):
-                    exposure_auto.SetIntValue(exposure_auto.GetEntryByName("Off").GetValue())
-                
-                exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
-                if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
-                    exposure_time.SetValue(20000.0)
-            except: pass
-
-            # 4. Gain
-            self.set_gain(self.gain)
-
-            # 5. [НОВОЕ] White Balance Init
-            # Если мы хотим управлять вручную, нужно выключить Auto
-            self.set_wb_red(self.wb_red)
+            # Применяем стартовые значения
+            self.set_exposure(self.exposure_time) # Выдержка
+            self.set_gain(self.gain)              # Усиление
+            self.set_wb_red(self.wb_red)          # Баланс белого
             
         except Exception as e:
             logger.error(f"Ошибка настройки камеры: {e}")
 
     def _convert_to_qimage(self, image_result):
+        # (Код конвертации без изменений, сокращен для краткости)
         try:
             image_data = image_result.GetNDArray()
             pixel_format = image_result.GetPixelFormat()
             rgb = None
-
-            # Конвертация в BGR (для OpenCV)
+            
             if pixel_format == PySpin.PixelFormat_Mono8:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2BGR)
             elif pixel_format == PySpin.PixelFormat_BayerRG8:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_BayerRG2BGR)
-            elif pixel_format == PySpin.PixelFormat_BayerBG8:
+            elif pixel_format == PySpin.PixelFormat_BayerBG8: # GR
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_BayerBG2BGR)
             elif pixel_format == PySpin.PixelFormat_BayerGB8:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_BayerGB2BGR)
@@ -176,21 +153,15 @@ class CameraWorker(QThread):
             elif pixel_format == PySpin.PixelFormat_BGR8:
                 rgb = image_data
             else:
-                if len(image_data.shape) == 2:
-                    rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2BGR)
-                else:
-                    return QImage()
+                if len(image_data.shape) == 2: rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2BGR)
+                else: return QImage()
 
             h, w, ch = rgb.shape
-            bytes_per_line = ch * w
-            
-            # Format_RGB888 инвертирует каналы BGR -> RGB, исправляя цвета
-            img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
             return img.copy() 
-            
-        except Exception as e:
-            logger.error(f"Ошибка конвертации: {e}")
-            return QImage()
+        except: return QImage()
+
+    # --- СЕТТЕРЫ ---
 
     def set_gain(self, value):
         if self.camera:
@@ -200,34 +171,45 @@ class CameraWorker(QThread):
                     node.SetValue(value)
             except: pass
 
-    # [НОВОЕ] Логика установки баланса белого
     def set_wb_red(self, value):
         if self.camera:
             try:
                 nodemap = self.camera.GetNodeMap()
-                
-                # 1. Выключаем авто-баланс, чтобы ручное управление работало
                 wb_auto = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceWhiteAuto"))
                 if PySpin.IsAvailable(wb_auto) and PySpin.IsWritable(wb_auto):
                     wb_auto.SetIntValue(wb_auto.GetEntryByName("Off").GetValue())
 
-                # 2. Выбираем селектор "Red"
                 selector = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceRatioSelector"))
                 if PySpin.IsAvailable(selector) and PySpin.IsWritable(selector):
                     selector.SetIntValue(selector.GetEntryByName("Red").GetValue())
                 
-                # 3. Устанавливаем значение
                 ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
                 if PySpin.IsAvailable(ratio) and PySpin.IsWritable(ratio):
                     ratio.SetValue(value)
-                    self.wb_red = value
-                    logger.info(f"WB Red Ratio set to: {value}")
+            except: pass
+
+    # [НОВОЕ] Метод установки выдержки
+    def set_exposure(self, value):
+        if self.camera:
+            try:
+                nodemap = self.camera.GetNodeMap()
+                # 1. Отключаем авто-экспозицию
+                exposure_auto = PySpin.CEnumerationPtr(nodemap.GetNode("ExposureAuto"))
+                if PySpin.IsAvailable(exposure_auto) and PySpin.IsWritable(exposure_auto):
+                    exposure_auto.SetIntValue(exposure_auto.GetEntryByName("Off").GetValue())
+                
+                # 2. Ставим время (проверяем границы)
+                exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
+                if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
+                    val = max(exposure_time.GetMin(), min(value, exposure_time.GetMax()))
+                    exposure_time.SetValue(val)
+                    self.exposure_time = val
+                    logger.info(f"Exposure set to: {val}")
             except Exception as e:
-                logger.error(f"Ошибка WB: {e}")
-            
+                logger.error(f"Ошибка Exposure: {e}")
+
     def capture_photo(self, file_path, format, quality):
-        # ... (код сохранения фото можно взять из прошлого примера)
-        pass
+        pass # (Логика сохранения)
 
     def _cleanup(self):
         try:
@@ -257,7 +239,8 @@ class CameraController(QObject):
         self._camera_info = {}
         self._image_path = ""
         self._gain_value = 15.0
-        self._wb_red_value = 1.5 # Дефолтное значение красного канала
+        self._wb_red_value = 1.5
+        self._exposure_value = 20000.0 # [НОВОЕ] Дефолт
         
         self.worker = None
         self.provider = None
@@ -266,13 +249,17 @@ class CameraController(QObject):
         self.provider = provider
 
     @Property(str, notify=imagePathChanged)
-    def imagePath(self):
-        return self._image_path
+    def imagePath(self): return self._image_path
 
     @Slot()
     def start_camera(self):
         if self.worker and self.worker.isRunning(): return
         self.worker = CameraWorker()
+        # Передаем текущие значения в воркер перед стартом
+        self.worker.exposure_time = self._exposure_value
+        self.worker.gain = self._gain_value
+        self.worker.wb_red = self._wb_red_value
+        
         self.worker.frame_ready.connect(self._on_frame_ready)
         self.worker.status_changed.connect(self._update_status)
         self.worker.fps_updated.connect(self._update_fps)
@@ -308,7 +295,8 @@ class CameraController(QObject):
     @Property('QVariantMap', notify=infoChanged)
     def cameraInfo(self): return self._camera_info
     
-    # Gain Property
+    # --- Свойства управления ---
+
     @Property(float)
     def gainValue(self): return self._gain_value
     @gainValue.setter
@@ -316,14 +304,21 @@ class CameraController(QObject):
         self._gain_value = val
         if self.worker: self.worker.set_gain(val)
 
-    # [НОВОЕ] WB Red Property (вместо Gamma)
     @Property(float)
     def wbRedValue(self): return self._wb_red_value
     @wbRedValue.setter
     def wbRedValue(self, val):
         self._wb_red_value = val
         if self.worker: self.worker.set_wb_red(val)
-        
+
+    # [НОВОЕ] Свойство Exposure
+    @Property(float)
+    def exposureValue(self): return self._exposure_value
+    @exposureValue.setter
+    def exposureValue(self, val):
+        self._exposure_value = val
+        if self.worker: self.worker.set_exposure(val)
+
     @Slot(str, str, int)
     def capture_photo(self, path, fmt, q):
         if self.worker:
