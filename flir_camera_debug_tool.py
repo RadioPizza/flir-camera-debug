@@ -1,9 +1,5 @@
 import os
-<<<<<<< HEAD
-import warnings 
-=======
 import warnings
->>>>>>> c4bf79debc8798fd78b4b4465a1208b87d9be68c
 
 # Полностью отключаем предупреждения OpenMP и другие
 os.environ['KMP_WARNINGS'] = '0'
@@ -91,24 +87,16 @@ def test_flir_camera():
                     rgb_image = cv2.cvtColor(image_data, cv2.COLOR_RGB2BGR)
                 else:
                     rgb_image = image_data
-<<<<<<< HEAD
-                    
-=======
 
                 # Масштабируем изображение для отображения (слишком большое 1936x1464)
->>>>>>> c4bf79debc8798fd78b4b4465a1208b87d9be68c
                 scale_percent = 50  # уменьшаем до 50%
                 width_scaled = int(rgb_image.shape[1] * scale_percent / 100)
                 height_scaled = int(rgb_image.shape[0] * scale_percent / 100)
                 dim = (width_scaled, height_scaled)
                 resized_image = cv2.resize(rgb_image, dim, interpolation=cv2.INTER_AREA)
 
-<<<<<<< HEAD
-                cv2.imshow('FLIR Camera Test', rgb_image)
-=======
                 cv2.imshow('FLIR Camera Test', resized_image)
 
->>>>>>> c4bf79debc8798fd78b4b4465a1208b87d9be68c
                 # Ждем нажатия клавиши (1 мс) и проверяем 'q'
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
@@ -116,10 +104,6 @@ def test_flir_camera():
                     break
 
             image_result.Release()
-<<<<<<< HEAD
-
-=======
->>>>>>> c4bf79debc8798fd78b4b4465a1208b87d9be68c
     except KeyboardInterrupt:
         logger.info("Программа прервана пользователем")
     finally:

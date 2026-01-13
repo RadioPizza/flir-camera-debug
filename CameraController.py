@@ -127,11 +127,11 @@ class CameraWorker(QThread):
             self._cleanup()
 
     def _setup_camera(self):
-        """Применение настроек камеры"""
+        """Применение настроек камеры: Выдержка и Баланс белого"""
         try:
             nodemap = self.camera.GetNodeMap()
             
-            # 1. Packet Size (Jumbo Frames)
+            # 1. Настройка пакетов (Jumbo Frames)
             try:
                 tl_stream_nodemap = self.camera.GetTLStreamNodeMap()
                 packet_size_node = PySpin.CIntegerPtr(tl_stream_nodemap.GetNode("StreamPacketSize"))
@@ -139,7 +139,7 @@ class CameraWorker(QThread):
                     packet_size_node.SetValue(min(packet_size_node.GetMax(), self.packet_size))
             except: pass
 
-            # 2. Buffer Handling (NewestOnly - чтобы не копилась очередь старых кадров)
+            # 2. Буферизация (NewestOnly)
             try:
                 tl_stream_nodemap = self.camera.GetTLStreamNodeMap()
                 buffer_mode = PySpin.CEnumerationPtr(tl_stream_nodemap.GetNode("StreamBufferHandlingMode"))
@@ -149,17 +149,44 @@ class CameraWorker(QThread):
                         buffer_mode.SetIntValue(entry.GetValue())
             except: pass
 
-            # 3. Pixel Format (BayerRG8 или Mono8 быстрее всего передавать)
-            # Мы будем конвертировать программно, поэтому берем RAW
-            pass # Оставляем дефолт или настраиваем при необходимости
+            # 3. [НОВОЕ] Выдержка (Exposure) -> 20000 мкс
+            logger.info("Настройка выдержки на 20000 мкс...")
+            try:
+                # Сначала ВЫКЛЮЧАЕМ автоэкспозицию, иначе вручную время не выставить
+                exposure_auto = PySpin.CEnumerationPtr(nodemap.GetNode("ExposureAuto"))
+                if PySpin.IsAvailable(exposure_auto) and PySpin.IsWritable(exposure_auto):
+                    exposure_auto.SetIntValue(exposure_auto.GetEntryByName("Off").GetValue())
+                
+                # Теперь ставим время
+                exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
+                if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
+                    # Проверяем границы, чтобы не сломать камеру
+                    target_exposure = 20000.0
+                    target_exposure = max(exposure_time.GetMin(), min(target_exposure, exposure_time.GetMax()))
+                    exposure_time.SetValue(target_exposure)
+                    self.exposure_time = target_exposure # Обновляем переменную в классе
+                    logger.info(f"Выдержка установлена: {target_exposure}")
+            except Exception as e:
+                logger.warning(f"Не удалось настроить выдержку: {e}")
 
-            # 4. Exposure & Gain
-            # (Код настройки аналогичен предыдущим версиям, сокращен для краткости)
+            # 4. [НОВОЕ] Баланс белого (White Balance) -> Auto Continuous
+            logger.info("Включение авто-баланса белого...")
+            try:
+                balance_white_auto = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceWhiteAuto"))
+                if PySpin.IsAvailable(balance_white_auto) and PySpin.IsWritable(balance_white_auto):
+                    balance_white_auto.SetIntValue(balance_white_auto.GetEntryByName("Continuous").GetValue())
+                    logger.info("Авто-баланс белого активирован (Continuous)")
+                else:
+                    logger.warning("Авто-баланс белого недоступен на этой камере")
+            except Exception as e:
+                logger.warning(f"Ошибка настройки баланса белого: {e}")
+
+            # 5. Gain & Gamma (Применяем сохраненные значения)
             self.set_gain(self.gain)
             self.set_gamma(self.gamma)
             
         except Exception as e:
-            logger.error(f"Ошибка настройки камеры: {e}")
+            logger.error(f"Критическая ошибка настройки камеры: {e}")
 
     def _convert_to_qimage(self, image_result):
         """Быстрая конвертация Spinnaker Image -> QImage"""
