@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+from logging.handlers import RotatingFileHandler # [НОВОЕ] Для ротации логов
 import platform
 import numpy as np
 import cv2
@@ -10,9 +11,38 @@ from PySide6.QtCore import QObject, Signal, Property, QThread, Slot, QMutex, QMu
 from PySide6.QtGui import QImage, QColor
 from PySide6.QtQuick import QQuickImageProvider
 
-# Настройка логгера
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("FLIR_System")
+# --- НАСТРОЙКА ПРОДВИНУТОГО ЛОГИРОВАНИЯ ---
+def setup_logger():
+    """Настройка логгера с ротацией файлов и форматированием"""
+    logger = logging.getLogger("FLIR_System")
+    logger.setLevel(logging.DEBUG)  # Ловим всё
+
+    # Формат: Время - Уровень - [Файл:Строка] - Сообщение
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s')
+
+    # 1. Вывод в консоль (Только важное)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+
+    # 2. Вывод в файл (Всё подряд, макс 5 МБ, храним 3 файла)
+    # Файл будет создаваться рядом с скриптом
+    log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "camera_debug.log")
+    file_handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+
+    # Очищаем старые хендлеры, чтобы не дублировать логи при перезапуске
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    
+    return logger
+
+# Инициализируем логгер
+logger = setup_logger()
 
 class LiveImageProvider(QQuickImageProvider):
     def __init__(self):
@@ -45,20 +75,31 @@ class CameraWorker(QThread):
         
         # Настройки по умолчанию
         self.target_fps = 30
-        self.exposure_time = 20000.0 # [ВАЖНО] Исходное значение 20000
+        self.exposure_time = 20000.0
         self.gain = 15.0
         self.wb_red = 1.5 
         
         self.packet_size = 9000
+        
+        logger.debug("CameraWorker инициализирован с параметрами по умолчанию.")
 
     def run(self):
         try:
-            logger.info("Инициализация FLIR System...")
+            logger.info("=== НАЧАЛО СЕССИИ ЗАХВАТА ===")
+            logger.info(f"System: {platform.system()} {platform.release()} | Python: {platform.python_version()}")
+
             self.system = PySpin.System.GetInstance()
+            version = self.system.GetLibraryVersion()
+            logger.info(f"PySpin Library Version: {version.major}.{version.minor}.{version.type}.{version.build}")
+
             cam_list = self.system.GetCameras()
+            count = cam_list.GetSize()
+            logger.info(f"Обнаружено камер: {count}")
             
-            if cam_list.GetSize() == 0:
-                self.error_occurred.emit("Камеры не найдены")
+            if count == 0:
+                msg = "Камеры не найдены"
+                logger.error(msg)
+                self.error_occurred.emit(msg)
                 cam_list.Clear()
                 self.system.ReleaseInstance()
                 return
@@ -66,9 +107,19 @@ class CameraWorker(QThread):
             self.camera = cam_list.GetByIndex(0)
             self.camera.Init()
             
+            # Логируем модель камеры
+            try:
+                nodemap_tl = self.camera.GetTLDeviceNodeMap()
+                model = PySpin.CStringPtr(nodemap_tl.GetNode("DeviceModelName")).GetValue()
+                serial = PySpin.CStringPtr(nodemap_tl.GetNode("DeviceSerialNumber")).GetValue()
+                logger.info(f"Подключено к: {model} (S/N: {serial})")
+            except:
+                logger.warning("Не удалось прочитать модель камеры")
+
             self._setup_camera()
             
             self.camera.BeginAcquisition()
+            logger.info("Acquisition Started")
             self.status_changed.emit("Камера запущена")
             self.running = True
             
@@ -78,61 +129,81 @@ class CameraWorker(QThread):
             while self.running:
                 try:
                     image_result = self.camera.GetNextImage(2000)
+                    
                     if image_result.IsIncomplete():
+                        status = image_result.GetImageStatus()
+                        logger.warning(f"Image Incomplete. Status: {status}")
                         image_result.Release()
                         continue
 
                     qimage = self._convert_to_qimage(image_result)
+                    
                     if not qimage.isNull():
                         self.frame_ready.emit(qimage)
                         fps_counter += 1
                     
                     image_result.Release()
                     
+                    # Логирование FPS
                     current_time = time.time()
                     if current_time - fps_timer >= 1.0:
                         fps = fps_counter / (current_time - fps_timer)
                         self.fps_updated.emit(fps)
+                        
+                        # Если FPS падает ниже 10, пишем Warning
+                        if fps < 10.0:
+                            logger.warning(f"Low FPS detected: {fps:.2f}")
+                        
                         fps_counter = 0
                         fps_timer = current_time
                         
+                except PySpin.SpinnakerException as ex:
+                    logger.error(f"Spinnaker Exception: {ex}")
+                    continue
                 except Exception as e:
-                    logger.warning(f"Ошибка в цикле захвата: {e}")
+                    logger.exception(f"Unexpected error in loop: {e}")
                     continue
 
         except Exception as e:
-            logger.error(f"Критическая ошибка Worker: {e}")
+            logger.critical(f"Critical Worker Crash: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
         finally:
             self._cleanup()
+            logger.info("=== КОНЕЦ СЕССИИ ЗАХВАТА ===")
 
     def _setup_camera(self):
         """Применение настроек камеры"""
+        logger.info("Применение начальных настроек камеры...")
         try:
             nodemap = self.camera.GetNodeMap()
             
-            # Packet Size & Buffer (Оптимизация)
+            # Packet Size
             try:
                 tl_stream_nodemap = self.camera.GetTLStreamNodeMap()
                 packet_node = PySpin.CIntegerPtr(tl_stream_nodemap.GetNode("StreamPacketSize"))
                 if PySpin.IsAvailable(packet_node) and PySpin.IsWritable(packet_node):
-                    packet_node.SetValue(min(packet_node.GetMax(), self.packet_size))
+                    val = min(packet_node.GetMax(), self.packet_size)
+                    packet_node.SetValue(val)
+                    logger.debug(f"Packet size set to: {val}")
                 
                 buffer_mode = PySpin.CEnumerationPtr(tl_stream_nodemap.GetNode("StreamBufferHandlingMode"))
                 if PySpin.IsAvailable(buffer_mode) and PySpin.IsWritable(buffer_mode):
                     buffer_mode.SetIntValue(buffer_mode.GetEntryByName("NewestOnly").GetValue())
-            except: pass
+                    logger.debug("Buffer mode: NewestOnly")
+            except Exception as e: 
+                logger.warning(f"Stream config error: {e}")
 
             # Применяем стартовые значения
-            self.set_exposure(self.exposure_time) # Выдержка
-            self.set_gain(self.gain)              # Усиление
-            self.set_wb_red(self.wb_red)          # Баланс белого
+            self.set_exposure(self.exposure_time)
+            self.set_gain(self.gain)
+            self.set_wb_red(self.wb_red)
+            
+            logger.info("Настройки применены успешно.")
             
         except Exception as e:
-            logger.error(f"Ошибка настройки камеры: {e}")
+            logger.error(f"Ошибка настройки камеры: {e}", exc_info=True)
 
     def _convert_to_qimage(self, image_result):
-        # (Код конвертации без изменений, сокращен для краткости)
         try:
             image_data = image_result.GetNDArray()
             pixel_format = image_result.GetPixelFormat()
@@ -142,7 +213,7 @@ class CameraWorker(QThread):
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2BGR)
             elif pixel_format == PySpin.PixelFormat_BayerRG8:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_BayerRG2BGR)
-            elif pixel_format == PySpin.PixelFormat_BayerBG8: # GR
+            elif pixel_format == PySpin.PixelFormat_BayerBG8: 
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_BayerBG2BGR)
             elif pixel_format == PySpin.PixelFormat_BayerGB8:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_BayerGB2BGR)
@@ -159,9 +230,11 @@ class CameraWorker(QThread):
             h, w, ch = rgb.shape
             img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
             return img.copy() 
-        except: return QImage()
+        except Exception as e:
+            logger.error(f"Image conversion error: {e}")
+            return QImage()
 
-    # --- СЕТТЕРЫ ---
+    # --- СЕТТЕРЫ С ЛОГИРОВАНИЕМ ---
 
     def set_gain(self, value):
         if self.camera:
@@ -169,7 +242,9 @@ class CameraWorker(QThread):
                 node = PySpin.CFloatPtr(self.camera.GetNodeMap().GetNode("Gain"))
                 if PySpin.IsAvailable(node) and PySpin.IsWritable(node):
                     node.SetValue(value)
-            except: pass
+                    logger.info(f"Gain changed to: {value:.1f} dB") # [LOG]
+            except Exception as e:
+                logger.error(f"Failed to set Gain: {e}")
 
     def set_wb_red(self, value):
         if self.camera:
@@ -186,40 +261,46 @@ class CameraWorker(QThread):
                 ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
                 if PySpin.IsAvailable(ratio) and PySpin.IsWritable(ratio):
                     ratio.SetValue(value)
-            except: pass
+                    logger.info(f"WB Red Ratio changed to: {value:.2f}") # [LOG]
+            except Exception as e:
+                logger.error(f"Failed to set WB: {e}")
 
-    # [НОВОЕ] Метод установки выдержки
     def set_exposure(self, value):
         if self.camera:
             try:
                 nodemap = self.camera.GetNodeMap()
-                # 1. Отключаем авто-экспозицию
                 exposure_auto = PySpin.CEnumerationPtr(nodemap.GetNode("ExposureAuto"))
                 if PySpin.IsAvailable(exposure_auto) and PySpin.IsWritable(exposure_auto):
                     exposure_auto.SetIntValue(exposure_auto.GetEntryByName("Off").GetValue())
                 
-                # 2. Ставим время (проверяем границы)
                 exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
                 if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
                     val = max(exposure_time.GetMin(), min(value, exposure_time.GetMax()))
                     exposure_time.SetValue(val)
                     self.exposure_time = val
-                    logger.info(f"Exposure set to: {val}")
+                    logger.info(f"Exposure changed to: {val:.1f} us") # [LOG]
             except Exception as e:
-                logger.error(f"Ошибка Exposure: {e}")
+                logger.error(f"Failed to set Exposure: {e}")
 
     def capture_photo(self, file_path, format, quality):
-        pass # (Логика сохранения)
+        try:
+            logger.info(f"Saving photo to: {file_path}") # [LOG]
+            # ... реализация сохранения (если нужна) ...
+            pass 
+        except Exception as e:
+             logger.error(f"Photo save error: {e}")
 
     def _cleanup(self):
         try:
+            logger.info("Cleaning up resources...")
             if self.camera:
                 self.camera.EndAcquisition()
                 self.camera.DeInit()
                 del self.camera
             if self.system:
                 self.system.ReleaseInstance()
-        except: pass
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
     
     def stop(self):
         self.running = False
@@ -240,10 +321,12 @@ class CameraController(QObject):
         self._image_path = ""
         self._gain_value = 15.0
         self._wb_red_value = 1.5
-        self._exposure_value = 20000.0 # [НОВОЕ] Дефолт
+        self._exposure_value = 20000.0
         
         self.worker = None
         self.provider = None
+        
+        logger.debug("CameraController initialized") # [LOG]
 
     def set_image_provider(self, provider):
         self.provider = provider
@@ -253,9 +336,11 @@ class CameraController(QObject):
 
     @Slot()
     def start_camera(self):
+        logger.info("UI: Start requested") # [LOG]
         if self.worker and self.worker.isRunning(): return
         self.worker = CameraWorker()
-        # Передаем текущие значения в воркер перед стартом
+        
+        # Передаем параметры
         self.worker.exposure_time = self._exposure_value
         self.worker.gain = self._gain_value
         self.worker.wb_red = self._wb_red_value
@@ -267,6 +352,7 @@ class CameraController(QObject):
 
     @Slot()
     def stop_camera(self):
+        logger.info("UI: Stop requested") # [LOG]
         if self.worker:
             self.worker.stop()
             self.worker = None
@@ -311,7 +397,6 @@ class CameraController(QObject):
         self._wb_red_value = val
         if self.worker: self.worker.set_wb_red(val)
 
-    # [НОВОЕ] Свойство Exposure
     @Property(float)
     def exposureValue(self): return self._exposure_value
     @exposureValue.setter
