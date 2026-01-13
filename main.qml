@@ -38,12 +38,10 @@ ApplicationWindow {
                 mipmap: true
             }
 
-            // Заглушка, если камера не активна
             Column {
                 anchors.centerIn: parent
                 visible: cameraController.status !== "Камера запущена"
                 spacing: 15
-                
                 Text {
                     text: "NO SIGNAL"
                     color: "#333"
@@ -66,7 +64,6 @@ ApplicationWindow {
             Layout.fillHeight: true
             color: "#1e1e1e"
             
-            // Разделитель
             Rectangle { 
                 width: 2; height: parent.height; color: "#333"; anchors.left: parent.left 
             }
@@ -78,7 +75,7 @@ ApplicationWindow {
 
                 ColumnLayout {
                     width: parent.width - 40
-                    spacing: 30 // Увеличили отступы между блоками
+                    spacing: 30 
 
                     Text {
                         text: "НАСТРОЙКИ СЕНСОРОВ"
@@ -109,78 +106,50 @@ ApplicationWindow {
                         }
                     }
 
-                    // --- SLIDER: GAMMA ---
+                    // --- [НОВОЕ] SLIDER: WHITE BALANCE (Red Ratio) ---
+                    // Заменили Gamma на это
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 15 // Чуть больше воздуха
+                        spacing: 15 
                         RowLayout {
-                            Text { text: "Gamma"; color: "white"; font.pixelSize: 20; font.bold: true }
+                            // Иконка температуры или просто текст
+                            Text { text: "Temp (Red Ratio)"; color: "white"; font.pixelSize: 20; font.bold: true }
                             Item { Layout.fillWidth: true }
-                            Text { text: cameraController.gammaValue.toFixed(2); color: "#2979ff"; font.pixelSize: 20; font.bold: true }
+                            Text { text: cameraController.wbRedValue.toFixed(2); color: "#ff9100"; font.pixelSize: 20; font.bold: true }
                         }
                         Slider {
-                            id: gammaSlider
-                            Layout.fillWidth: true; Layout.preferredHeight: 40; from: 0.1; to: 4.0; value: cameraController.gammaValue
+                            id: wbSlider
+                            Layout.fillWidth: true; Layout.preferredHeight: 40
+                            from: 0.8  // Холодный (мало красного)
+                            to: 3.0    // Теплый (много красного)
+                            value: cameraController.wbRedValue
+                            
                             handle: Rectangle {
-                                x: gammaSlider.leftPadding + gammaSlider.visualPosition * (gammaSlider.availableWidth - width)
-                                y: gammaSlider.topPadding + gammaSlider.availableHeight / 2 - height / 2
+                                x: wbSlider.leftPadding + wbSlider.visualPosition * (wbSlider.availableWidth - width)
+                                y: wbSlider.topPadding + wbSlider.availableHeight / 2 - height / 2
                                 width: 32; height: 32; radius: 16
-                                color: gammaSlider.pressed ? "#2979ff" : "#f6f6f6"; border.color: "#333"
+                                color: wbSlider.pressed ? "#ff9100" : "#f6f6f6"; border.color: "#333"
                             }
-                            onMoved: cameraController.gammaValue = value
-                        }
-                        
-                        // [ИЗМЕНЕНИЕ] Переключатель Gamma в отдельном RowLayout
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 15 
-                            
-                            // Сам переключатель (Слева)
-                            Switch {
-                                id: gammaSw
-                                checked: cameraController.gammaEnabled
-                                onCheckedChanged: cameraController.gammaEnabled = checked
-                                
-                                indicator: Rectangle {
-                                    implicitWidth: 64; implicitHeight: 38; radius: 19 // Увеличили размер свитча
-                                    color: gammaSw.checked ? "#2979ff" : "#333"
-                                    border.color: gammaSw.checked ? "#2979ff" : "#cccccc"
-                                    Rectangle {
-                                        x: gammaSw.checked ? parent.width - width - 4 : 4
-                                        width: 30; height: 30; radius: 15; y: 4; color: "white"
-                                        Behavior on x { NumberAnimation { duration: 100 } }
-                                    }
-                                }
-                            }
-                            
-                            // Текст (Справа)
-                            Text {
-                                text: "Gamma Enable"
-                                color: gammaSw.checked ? "white" : "#777"
-                                font.pixelSize: 20 // Крупнее шрифт
-                                font.bold: true
-                            }
-                            
-                            Item { Layout.fillWidth: true } // Прижать влево
+                            onMoved: cameraController.wbRedValue = value
                         }
                     }
 
                     Item { Layout.fillHeight: true } // Пружина
 
-                    // --- КНОПКИ (Увеличены) ---
+                    // --- КНОПКИ ---
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 20
 
                         Button {
                             Layout.fillWidth: true; 
-                            Layout.preferredHeight: 90 // Было 70, стало 90
+                            Layout.preferredHeight: 90
                             enabled: cameraController.status === "Камера запущена"
                             onClicked: fileDialog.open()
                             background: Rectangle { color: parent.down ? "#1565c0" : "#2196f3"; radius: 16; opacity: parent.enabled ? 1 : 0.3 }
                             contentItem: Text { 
                                 text: "СНИМОК"; 
-                                font.pixelSize: 24; // Было 20
+                                font.pixelSize: 24; 
                                 font.bold: true; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter 
                             }
                         }
@@ -212,20 +181,19 @@ ApplicationWindow {
                         }
                     }
 
-                    // --- [ИЗМЕНЕНИЕ] БЛОК ТЕЛЕМЕТРИИ (Увеличен) ---
+                    // --- БЛОК ТЕЛЕМЕТРИИ ---
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 120
                         Layout.topMargin: 20
                         color: "#252525"
-                        radius: 16
+                        radius: 20
                         border.color: "#333"
 
                         RowLayout {
                             anchors.fill: parent
-                            anchors.margins: 20 // Больше отступ внутри
+                            anchors.margins: 20
                             
-                            // Надпись статуса
                             ColumnLayout {
                                 spacing: 4
                                 Text { 
@@ -234,14 +202,13 @@ ApplicationWindow {
                                 Text { 
                                     text: cameraController.status === "Камера запущена" ? "ONLINE" : "OFFLINE"
                                     color: cameraController.status === "Камера запущена" ? "#00e676" : "#666" 
-                                    font.pixelSize: 22 // Увеличили
+                                    font.pixelSize: 22
                                     font.bold: true
                                 }
                             }
                             
-                            Item { Layout.fillWidth: true } // Распорка
+                            Item { Layout.fillWidth: true } 
 
-                            // Счетчик FPS
                             RowLayout {
                                 spacing: 15
                                 Text { 
@@ -254,7 +221,7 @@ ApplicationWindow {
                                 Text {
                                     text: Math.round(cameraController.currentFps * 10) / 10
                                     color: cameraController.currentFps > 25 ? "#00e676" : (cameraController.currentFps > 10 ? "#ffeb3b" : "#ff3d00")
-                                    font.pixelSize: 42 // Очень крупно, чтобы влезало и читалось
+                                    font.pixelSize: 42
                                     font.bold: true
                                 }
                             }
