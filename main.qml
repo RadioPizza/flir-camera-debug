@@ -75,7 +75,7 @@ ApplicationWindow {
 
                 ColumnLayout {
                     width: parent.width - 40
-                    spacing: 30 
+                    spacing: 35 // Еще больше воздуха между блоками
 
                     Text {
                         text: "НАСТРОЙКИ СЕНСОРОВ"
@@ -84,50 +84,54 @@ ApplicationWindow {
                         font.bold: true
                     }
 
-                    // --- SLIDER: GAIN ---
+                    // --- SLIDER: УСИЛЕНИЕ (GAIN) ---
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        spacing: 15
                         RowLayout {
-                            Text { text: "Gain (dB)"; color: "white"; font.pixelSize: 20; font.bold: true }
+                            // [ПЕРЕВОД]
+                            Text { text: "Усиление (дБ)"; color: "white"; font.pixelSize: 22; font.bold: true }
                             Item { Layout.fillWidth: true }
-                            Text { text: cameraController.gainValue.toFixed(1); color: "#00e676"; font.pixelSize: 20; font.bold: true }
+                            Text { text: cameraController.gainValue.toFixed(1); color: "#00e676"; font.pixelSize: 22; font.bold: true }
                         }
                         Slider {
                             id: gainSlider
-                            Layout.fillWidth: true; Layout.preferredHeight: 40; from: 0.0; to: 40.0; value: cameraController.gainValue
+                            Layout.fillWidth: true; 
+                            Layout.preferredHeight: 50 // Увеличили зону касания
+                            from: 0.0; to: 40.0; value: cameraController.gainValue
+                            
+                            // [УВЕЛИЧЕНИЕ] Большая ручка 48x48
                             handle: Rectangle {
                                 x: gainSlider.leftPadding + gainSlider.visualPosition * (gainSlider.availableWidth - width)
                                 y: gainSlider.topPadding + gainSlider.availableHeight / 2 - height / 2
-                                width: 32; height: 32; radius: 16
+                                width: 48; height: 48; radius: 24
                                 color: gainSlider.pressed ? "#00e676" : "#f6f6f6"; border.color: "#333"
                             }
                             onMoved: cameraController.gainValue = value
                         }
                     }
 
-                    // --- [НОВОЕ] SLIDER: WHITE BALANCE (Red Ratio) ---
-                    // Заменили Gamma на это
+                    // --- SLIDER: БАЛАНС (RED RATIO) ---
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 15 
                         RowLayout {
-                            // Иконка температуры или просто текст
-                            Text { text: "Temp (Red Ratio)"; color: "white"; font.pixelSize: 20; font.bold: true }
+                            // [ПЕРЕВОД]
+                            Text { text: "Баланс (Красный)"; color: "white"; font.pixelSize: 22; font.bold: true }
                             Item { Layout.fillWidth: true }
-                            Text { text: cameraController.wbRedValue.toFixed(2); color: "#ff9100"; font.pixelSize: 20; font.bold: true }
+                            Text { text: cameraController.wbRedValue.toFixed(2); color: "#ff9100"; font.pixelSize: 22; font.bold: true }
                         }
                         Slider {
                             id: wbSlider
-                            Layout.fillWidth: true; Layout.preferredHeight: 40
-                            from: 0.8  // Холодный (мало красного)
-                            to: 3.0    // Теплый (много красного)
-                            value: cameraController.wbRedValue
+                            Layout.fillWidth: true; 
+                            Layout.preferredHeight: 50
+                            from: 0.8; to: 3.0; value: cameraController.wbRedValue
                             
+                            // [УВЕЛИЧЕНИЕ] Большая ручка 48x48
                             handle: Rectangle {
                                 x: wbSlider.leftPadding + wbSlider.visualPosition * (wbSlider.availableWidth - width)
                                 y: wbSlider.topPadding + wbSlider.availableHeight / 2 - height / 2
-                                width: 32; height: 32; radius: 16
+                                width: 48; height: 48; radius: 24
                                 color: wbSlider.pressed ? "#ff9100" : "#f6f6f6"; border.color: "#333"
                             }
                             onMoved: cameraController.wbRedValue = value
@@ -181,18 +185,18 @@ ApplicationWindow {
                         }
                     }
 
-                    // --- БЛОК ТЕЛЕМЕТРИИ ---
+                    // --- БЛОК ТЕЛЕМЕТРИИ (УВЕЛИЧЕН) ---
                     Rectangle {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 120
+                        Layout.preferredHeight: 100 // [ИЗМЕНЕНИЕ] Было 100, стало 120
                         Layout.topMargin: 20
                         color: "#252525"
-                        radius: 20
+                        radius: 16
                         border.color: "#333"
 
                         RowLayout {
                             anchors.fill: parent
-                            anchors.margins: 20
+                            //anchors.margins: 5 // Больше отступы внутри
                             
                             ColumnLayout {
                                 spacing: 4
@@ -210,18 +214,19 @@ ApplicationWindow {
                             Item { Layout.fillWidth: true } 
 
                             RowLayout {
-                                spacing: 15
+                                spacing: 20
                                 Text { 
                                     text: "FPS"
                                     color: "#aaa"
                                     font.pixelSize: 24
                                     font.bold: true
                                     verticalAlignment: Text.AlignBottom
+                                    bottomPadding: 6 // Выравнивание по базовой линии
                                 }
                                 Text {
                                     text: Math.round(cameraController.currentFps * 10) / 10
                                     color: cameraController.currentFps > 25 ? "#00e676" : (cameraController.currentFps > 10 ? "#ffeb3b" : "#ff3d00")
-                                    font.pixelSize: 42
+                                    font.pixelSize: 48 // Еще крупнее
                                     font.bold: true
                                 }
                             }
