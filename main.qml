@@ -1,3 +1,12 @@
+/*
+ * Main Interface (main.qml)
+ * * Основной экран управления тепловизионной системой.
+ * Оптимизирован для сенсорного управления (Tablet UI).
+ * * Структура:
+ * - Левая часть: Видеопоток (Image Provider)
+ * - Правая часть: Панель управления (Gain, Exposure, WB) и Телеметрия
+ */
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -13,6 +22,7 @@ ApplicationWindow {
     height: 800
     color: "#121212"
 
+    // Material Design: Dark Theme
     Material.theme: Material.Dark
     Material.accent: Material.LightGreen
 
@@ -22,7 +32,7 @@ ApplicationWindow {
         anchors.fill: parent
         spacing: 0
 
-        // === ЗОНА 1: ВИДЕОПОТОК ===
+        // === ЗОНА 1: ВИДЕОПОТОК (Слева) ===
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -32,16 +42,19 @@ ApplicationWindow {
                 id: camView
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectFit
+                // Используем провайдер "live"
                 source: cameraController.imagePath
                 cache: false
                 asynchronous: false
                 mipmap: true
             }
 
+            // Заглушка при отсутствии сигнала
             Column {
                 anchors.centerIn: parent
                 visible: cameraController.status !== "Камера запущена"
                 spacing: 15
+                
                 Text {
                     text: "NO SIGNAL"
                     color: "#333"
@@ -58,12 +71,13 @@ ApplicationWindow {
             }
         }
 
-        // === ЗОНА 2: ПАНЕЛЬ УПРАВЛЕНИЯ ===
+        // === ЗОНА 2: ПАНЕЛЬ УПРАВЛЕНИЯ (Справа) ===
         Rectangle {
             Layout.preferredWidth: 380
             Layout.fillHeight: true
             color: "#1e1e1e"
             
+            // Вертикальный разделитель
             Rectangle { 
                 width: 2; height: parent.height; color: "#333"; anchors.left: parent.left 
             }
@@ -97,6 +111,7 @@ ApplicationWindow {
                             id: gainSlider
                             Layout.fillWidth: true; Layout.preferredHeight: 50
                             from: 0.0; to: 40.0; value: cameraController.gainValue
+                            
                             handle: Rectangle {
                                 x: gainSlider.leftPadding + gainSlider.visualPosition * (gainSlider.availableWidth - width)
                                 y: gainSlider.topPadding + gainSlider.availableHeight / 2 - height / 2
@@ -107,7 +122,7 @@ ApplicationWindow {
                         }
                     }
 
-                    // --- [НОВОЕ] SLIDER 2: ВЫДЕРЖКА (EXPOSURE) ---
+                    // --- SLIDER 2: ВЫДЕРЖКА (EXPOSURE) ---
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 15
@@ -119,7 +134,7 @@ ApplicationWindow {
                         Slider {
                             id: expSlider
                             Layout.fillWidth: true; Layout.preferredHeight: 50
-                            from: 1000.0; to: 50000.0; // Диапазон от 1мс до 50мс
+                            from: 1000.0; to: 50000.0; // 1ms - 50ms
                             value: cameraController.exposureValue
                             
                             handle: Rectangle {
@@ -145,6 +160,7 @@ ApplicationWindow {
                             id: wbSlider
                             Layout.fillWidth: true; Layout.preferredHeight: 50
                             from: 0.8; to: 3.0; value: cameraController.wbRedValue
+                            
                             handle: Rectangle {
                                 x: wbSlider.leftPadding + wbSlider.visualPosition * (wbSlider.availableWidth - width)
                                 y: wbSlider.topPadding + wbSlider.availableHeight / 2 - height / 2
@@ -155,9 +171,9 @@ ApplicationWindow {
                         }
                     }
 
-                    Item { Layout.fillHeight: true } 
+                    Item { Layout.fillHeight: true } // Пружина-распорка
 
-                    // --- КНОПКИ ---
+                    // --- КНОПКИ УПРАВЛЕНИЯ ---
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 20
@@ -166,8 +182,16 @@ ApplicationWindow {
                             Layout.fillWidth: true; Layout.preferredHeight: 90
                             enabled: cameraController.status === "Камера запущена"
                             onClicked: fileDialog.open()
-                            background: Rectangle { color: parent.down ? "#1565c0" : "#2196f3"; radius: 16; opacity: parent.enabled ? 1 : 0.3 }
-                            contentItem: Text { text: "СНИМОК"; font.pixelSize: 24; font.bold: true; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            background: Rectangle { 
+                                color: parent.down ? "#1565c0" : "#2196f3" 
+                                radius: 16
+                                opacity: parent.enabled ? 1 : 0.3 
+                            }
+                            contentItem: Text { 
+                                text: "СНИМОК"
+                                font.pixelSize: 24; font.bold: true; color: "white" 
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter 
+                            }
                         }
 
                         Button {
@@ -175,7 +199,11 @@ ApplicationWindow {
                             visible: cameraController.status !== "Камера запущена"
                             onClicked: cameraController.start_camera()
                             background: Rectangle { color: parent.down ? "#2e7d32" : "#43a047"; radius: 16 }
-                            contentItem: Text { text: "СТАРТ"; font.pixelSize: 24; font.bold: true; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            contentItem: Text { 
+                                text: "СТАРТ"
+                                font.pixelSize: 24; font.bold: true; color: "white"
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter 
+                            }
                         }
 
                         Button {
@@ -183,17 +211,24 @@ ApplicationWindow {
                             visible: cameraController.status === "Камера запущена"
                             onClicked: cameraController.stop_camera()
                             background: Rectangle { color: parent.down ? "#c62828" : "#e53935"; radius: 16 }
-                            contentItem: Text { text: "СТОП"; font.pixelSize: 24; font.bold: true; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            contentItem: Text { 
+                                text: "СТОП"
+                                font.pixelSize: 24; font.bold: true; color: "white"
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter 
+                            }
                         }
                     }
 
-                    // --- ТЕЛЕМЕТРИЯ ---
+                    // --- БЛОК ТЕЛЕМЕТРИИ (FPS) ---
                     Rectangle {
-                        Layout.fillWidth: true; Layout.preferredHeight: 100
-                        Layout.topMargin: 20; color: "#252525"; radius: 16; border.color: "#333"
+                        Layout.fillWidth: true; Layout.preferredHeight: 120
+                        Layout.topMargin: 20
+                        color: "#252525"; radius: 16; border.color: "#333"
 
                         RowLayout {
-                            anchors.fill: parent;
+                            anchors.fill: parent; anchors.margins: 25
+                            
+                            // Статус
                             ColumnLayout {
                                 spacing: 4
                                 Text { text: "СИСТЕМА"; color: "#888"; font.pixelSize: 14; font.bold: true }
@@ -203,10 +238,16 @@ ApplicationWindow {
                                     font.pixelSize: 22; font.bold: true
                                 }
                             }
+                            
                             Item { Layout.fillWidth: true } 
+
+                            // FPS Counter
                             RowLayout {
                                 spacing: 20
-                                Text { text: "FPS"; color: "#aaa"; font.pixelSize: 24; font.bold: true; verticalAlignment: Text.AlignBottom; bottomPadding: 6 }
+                                Text { 
+                                    text: "FPS"; color: "#aaa"; font.pixelSize: 24; 
+                                    font.bold: true; verticalAlignment: Text.AlignBottom; bottomPadding: 6 
+                                }
                                 Text {
                                     text: Math.round(cameraController.currentFps * 10) / 10
                                     color: cameraController.currentFps > 25 ? "#00e676" : (cameraController.currentFps > 10 ? "#ffeb3b" : "#ff3d00")
@@ -215,12 +256,14 @@ ApplicationWindow {
                             }
                         }
                     }
+                    
                     Item { height: 10 }
                 }
             }
         }
     }
 
+    // Диалог сохранения файла
     FileDialog {
         id: fileDialog
         title: "Сохранить кадр"
