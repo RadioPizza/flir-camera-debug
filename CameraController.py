@@ -10,6 +10,7 @@ Camera Controller Module.
 import os
 import time
 import logging
+import json  # [Добавлено] Для работы с конфигами
 from logging.handlers import RotatingFileHandler
 import platform
 import numpy as np
@@ -26,26 +27,17 @@ from PySide6.QtQuick import QQuickImageProvider
 
 # --- НАСТРОЙКА ПРОДВИНУТОГО ЛОГИРОВАНИЯ ---
 def setup_logger():
-    """
-    Настройка логгера с ротацией файлов и форматированием.
-    
-    Returns:
-        logging.Logger: Настроенный объект логгера.
-    """
     logger = logging.getLogger("FLIR_System")
-    logger.setLevel(logging.DEBUG)  # Ловим всё
+    logger.setLevel(logging.DEBUG)
 
-    # Формат: Время - Уровень - [Файл:Строка] - Сообщение
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
     )
 
-    # 1. Вывод в консоль (Только важное)
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
 
-    # 2. Вывод в файл (Всё подряд, макс 5 МБ, храним 3 файла)
     log_file = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), 
         "camera_debug.log"
@@ -59,7 +51,6 @@ def setup_logger():
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
 
-    # Очищаем старые хендлеры
     if logger.hasHandlers():
         logger.handlers.clear()
 
@@ -69,15 +60,11 @@ def setup_logger():
     return logger
 
 
-# Инициализируем глобальный логгер
 logger = setup_logger()
 
 
 class LiveImageProvider(QQuickImageProvider):
-    """
-    Провайдер изображений для QML (Direct Memory Access).
-    Позволяет передавать QImage в QML без кодирования в Base64.
-    """
+    """Провайдер изображений для QML (Direct Memory Access)."""
     def __init__(self):
         super().__init__(QQuickImageProvider.ImageType.Image)
         self._current_image = QImage(800, 600, QImage.Format_RGB888)
@@ -85,22 +72,17 @@ class LiveImageProvider(QQuickImageProvider):
         self.mutex = QMutex()
 
     def requestImage(self, id, size, requestedSize):
-        """Вызывается движком QML при запросе кадра."""
         with QMutexLocker(self.mutex):
             return self._current_image
             
     def update_image(self, image):
-        """Обновляет буфер изображения в потокобезопасном режиме."""
         with QMutexLocker(self.mutex):
             if not image.isNull():
                 self._current_image = image
 
 
 class CameraWorker(QThread):
-    """
-    Рабочий поток захвата видео (Backend).
-    Управляет циклом получения кадров от PySpin SDK.
-    """
+    """Рабочий поток захвата видео (Backend)."""
     frame_ready = Signal(QImage)
     status_changed = Signal(str)
     error_occurred = Signal(str)
@@ -119,26 +101,16 @@ class CameraWorker(QThread):
         self.wb_red = 1.5 
         
         self.packet_size = 9000
-        
-        logger.debug("CameraWorker инициализирован с параметрами по умолчанию.")
+        logger.debug("CameraWorker инициализирован.")
 
     def run(self):
-        """Основной цикл потока."""
         try:
             logger.info("=== НАЧАЛО СЕССИИ ЗАХВАТА ===")
-            logger.info(f"System: {platform.system()} {platform.release()}")
-
             self.system = PySpin.System.GetInstance()
-            
-            # Поиск камер
             cam_list = self.system.GetCameras()
-            count = cam_list.GetSize()
-            logger.info(f"Обнаружено камер: {count}")
             
-            if count == 0:
-                msg = "Камеры не найдены"
-                logger.error(msg)
-                self.error_occurred.emit(msg)
+            if cam_list.GetSize() == 0:
+                self.error_occurred.emit("Камеры не найдены")
                 cam_list.Clear()
                 self.system.ReleaseInstance()
                 return
@@ -146,19 +118,9 @@ class CameraWorker(QThread):
             self.camera = cam_list.GetByIndex(0)
             self.camera.Init()
             
-            # Логируем модель
-            try:
-                nodemap = self.camera.GetTLDeviceNodeMap()
-                model = PySpin.CStringPtr(nodemap.GetNode("DeviceModelName")).GetValue()
-                serial = PySpin.CStringPtr(nodemap.GetNode("DeviceSerialNumber")).GetValue()
-                logger.info(f"Подключено к: {model} (S/N: {serial})")
-            except:
-                logger.warning("Не удалось прочитать модель камеры")
-
             self._setup_camera()
             
             self.camera.BeginAcquisition()
-            logger.info("Acquisition Started")
             self.status_changed.emit("Камера запущена")
             self.running = True
             
@@ -167,40 +129,29 @@ class CameraWorker(QThread):
             
             while self.running:
                 try:
-                    # Таймаут 2000 мс
                     image_result = self.camera.GetNextImage(2000)
-                    
                     if image_result.IsIncomplete():
-                        status = image_result.GetImageStatus()
-                        logger.warning(f"Image Incomplete. Status: {status}")
                         image_result.Release()
                         continue
 
                     qimage = self._convert_to_qimage(image_result)
-                    
                     if not qimage.isNull():
                         self.frame_ready.emit(qimage)
                         fps_counter += 1
                     
                     image_result.Release()
                     
-                    # Расчет FPS
                     current_time = time.time()
                     if current_time - fps_timer >= 1.0:
                         fps = fps_counter / (current_time - fps_timer)
                         self.fps_updated.emit(fps)
-                        
-                        if fps < 10.0:
-                            logger.warning(f"Low FPS detected: {fps:.2f}")
-                        
                         fps_counter = 0
                         fps_timer = current_time
                         
                 except PySpin.SpinnakerException as ex:
                     logger.error(f"Spinnaker Exception: {ex}")
                     continue
-                except Exception as e:
-                    logger.exception(f"Unexpected error in loop: {e}")
+                except Exception:
                     continue
 
         except Exception as e:
@@ -211,43 +162,35 @@ class CameraWorker(QThread):
             logger.info("=== КОНЕЦ СЕССИИ ЗАХВАТА ===")
 
     def _setup_camera(self):
-        """Применение настроек камеры и оптимизация потока."""
-        logger.info("Применение начальных настроек камеры...")
         try:
-            # Настройка пакетов (Jumbo Frames) и буферизации
+            # Настройка пакетов
             try:
                 tl_stream_nodemap = self.camera.GetTLStreamNodeMap()
                 packet_node = PySpin.CIntegerPtr(tl_stream_nodemap.GetNode("StreamPacketSize"))
                 if PySpin.IsAvailable(packet_node) and PySpin.IsWritable(packet_node):
                     val = min(packet_node.GetMax(), self.packet_size)
                     packet_node.SetValue(val)
-                    logger.debug(f"Packet size set to: {val}")
                 
                 buffer_mode = PySpin.CEnumerationPtr(tl_stream_nodemap.GetNode("StreamBufferHandlingMode"))
                 if PySpin.IsAvailable(buffer_mode) and PySpin.IsWritable(buffer_mode):
                     buffer_mode.SetIntValue(buffer_mode.GetEntryByName("NewestOnly").GetValue())
-                    logger.debug("Buffer mode: NewestOnly")
-            except Exception as e: 
-                logger.warning(f"Stream config error: {e}")
+            except Exception: 
+                pass
 
             # Применяем значения сенсоров
             self.set_exposure(self.exposure_time)
             self.set_gain(self.gain)
             self.set_wb_red(self.wb_red)
             
-            logger.info("Настройки применены успешно.")
-            
         except Exception as e:
-            logger.error(f"Ошибка настройки камеры: {e}", exc_info=True)
+            logger.error(f"Ошибка настройки камеры: {e}")
 
     def _convert_to_qimage(self, image_result):
-        """Конвертация PySpin Image -> QImage (Format_RGB888)."""
         try:
             image_data = image_result.GetNDArray()
             pixel_format = image_result.GetPixelFormat()
             rgb = None
             
-            # Конвертация BGR/Bayer -> RGB
             if pixel_format == PySpin.PixelFormat_Mono8:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2BGR)
             elif pixel_format == PySpin.PixelFormat_BayerRG8:
@@ -257,18 +200,15 @@ class CameraWorker(QThread):
             elif pixel_format == PySpin.PixelFormat_BGR8:
                 rgb = image_data
             else:
-                # Fallback для остальных форматов
                 if len(image_data.shape) == 2: 
                     rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2BGR)
                 else: 
                     return QImage()
 
             h, w, ch = rgb.shape
-            # Format_RGB888 исправляет инверсию цветов (Blue <-> Red)
             img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
             return img.copy() 
-        except Exception as e:
-            logger.error(f"Image conversion error: {e}")
+        except Exception:
             return QImage()
 
     # --- СЕТТЕРЫ (Hardware Control) ---
@@ -279,7 +219,6 @@ class CameraWorker(QThread):
                 node = PySpin.CFloatPtr(self.camera.GetNodeMap().GetNode("Gain"))
                 if PySpin.IsAvailable(node) and PySpin.IsWritable(node):
                     node.SetValue(value)
-                    logger.info(f"Gain changed to: {value:.1f} dB")
             except Exception as e:
                 logger.error(f"Failed to set Gain: {e}")
 
@@ -298,7 +237,6 @@ class CameraWorker(QThread):
                 ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
                 if PySpin.IsAvailable(ratio) and PySpin.IsWritable(ratio):
                     ratio.SetValue(value)
-                    logger.info(f"WB Red Ratio changed to: {value:.2f}")
             except Exception as e:
                 logger.error(f"Failed to set WB: {e}")
 
@@ -315,30 +253,19 @@ class CameraWorker(QThread):
                     val = max(exposure_time.GetMin(), min(value, exposure_time.GetMax()))
                     exposure_time.SetValue(val)
                     self.exposure_time = val
-                    logger.info(f"Exposure changed to: {val:.1f} us")
             except Exception as e:
                 logger.error(f"Failed to set Exposure: {e}")
 
     def capture_photo(self, file_path, format, quality):
-        """Сохранение кадра (Заглушка для реализации)."""
-        try:
-            logger.info(f"Saving photo to: {file_path}")
-            pass 
-        except Exception as e:
-             logger.error(f"Photo save error: {e}")
+        pass 
 
     def _cleanup(self):
-        """Освобождение ресурсов камеры."""
-        try:
-            logger.info("Cleaning up resources...")
-            if self.camera:
-                self.camera.EndAcquisition()
-                self.camera.DeInit()
-                del self.camera
-            if self.system:
-                self.system.ReleaseInstance()
-        except Exception as e:
-            logger.error(f"Cleanup error: {e}")
+        if self.camera:
+            self.camera.EndAcquisition()
+            self.camera.DeInit()
+            del self.camera
+        if self.system:
+            self.system.ReleaseInstance()
     
     def stop(self):
         self.running = False
@@ -348,13 +275,17 @@ class CameraWorker(QThread):
 class CameraController(QObject):
     """
     Контроллер приложения (UI Logic).
-    Связывает QML интерфейс с рабочим потоком CameraWorker.
     """
     frameChanged = Signal()
     statusChanged = Signal()
     infoChanged = Signal()
     currentFpsChanged = Signal()
-    imagePathChanged = Signal() 
+    imagePathChanged = Signal()
+    
+    # [Добавлено] Сигналы уведомления для синхронизации UI при загрузке пресета
+    gainChanged = Signal()
+    exposureChanged = Signal()
+    wbRedChanged = Signal()
 
     def __init__(self):
         super().__init__()
@@ -363,10 +294,19 @@ class CameraController(QObject):
         self._camera_info = {}
         self._image_path = ""
         
-        # Начальные значения свойств
-        self._gain_value = 15.0
-        self._wb_red_value = 1.5
-        self._exposure_value = 20000.0
+        # Значения по умолчанию
+        self.DEFAULT_CONFIG = {
+            "exposure": 20000.0,
+            "gain": 15.0,
+            "wb_red": 1.5
+        }
+        
+        self.CONFIG_FILE = os.path.join(os.path.dirname(__file__), "camera_preset.json")
+        
+        # Инициализация текущих значений дефолтными
+        self._gain_value = self.DEFAULT_CONFIG["gain"]
+        self._wb_red_value = self.DEFAULT_CONFIG["wb_red"]
+        self._exposure_value = self.DEFAULT_CONFIG["exposure"]
         
         self.worker = None
         self.provider = None
@@ -381,13 +321,12 @@ class CameraController(QObject):
 
     @Slot()
     def start_camera(self):
-        """Запуск потока камеры."""
         logger.info("UI: Start requested")
         if self.worker and self.worker.isRunning(): return
         
         self.worker = CameraWorker()
         
-        # Передаем текущие параметры UI в воркер
+        # Передаем текущие параметры
         self.worker.exposure_time = self._exposure_value
         self.worker.gain = self._gain_value
         self.worker.wb_red = self._wb_red_value
@@ -399,7 +338,6 @@ class CameraController(QObject):
 
     @Slot()
     def stop_camera(self):
-        """Остановка потока камеры."""
         logger.info("UI: Stop requested")
         if self.worker:
             self.worker.stop()
@@ -407,10 +345,8 @@ class CameraController(QObject):
             self._update_status("Остановлено")
 
     def _on_frame_ready(self, qimage):
-        """Обработка готового кадра из воркера."""
         if self.provider:
             self.provider.update_image(qimage)
-            # Трюк с timestamp для обновления Image в QML
             self._image_path = f"image://live/frame_{time.time()}"
             self.imagePathChanged.emit()
 
@@ -433,26 +369,88 @@ class CameraController(QObject):
     @Property('QVariantMap', notify=infoChanged)
     def cameraInfo(self): return self._camera_info
     
-    @Property(float)
+    # [Обновлено] Сеттеры теперь проверяют изменение и эмиссируют сигнал
+    @Property(float, notify=gainChanged)
     def gainValue(self): return self._gain_value
+    
     @gainValue.setter
     def gainValue(self, val):
-        self._gain_value = val
-        if self.worker: self.worker.set_gain(val)
+        if self._gain_value != val:
+            self._gain_value = val
+            if self.worker: self.worker.set_gain(val)
+            self.gainChanged.emit()
 
-    @Property(float)
+    @Property(float, notify=wbRedChanged)
     def wbRedValue(self): return self._wb_red_value
+    
     @wbRedValue.setter
     def wbRedValue(self, val):
-        self._wb_red_value = val
-        if self.worker: self.worker.set_wb_red(val)
+        if self._wb_red_value != val:
+            self._wb_red_value = val
+            if self.worker: self.worker.set_wb_red(val)
+            self.wbRedChanged.emit()
 
-    @Property(float)
+    @Property(float, notify=exposureChanged)
     def exposureValue(self): return self._exposure_value
+    
     @exposureValue.setter
     def exposureValue(self, val):
-        self._exposure_value = val
-        if self.worker: self.worker.set_exposure(val)
+        if self._exposure_value != val:
+            self._exposure_value = val
+            if self.worker: self.worker.set_exposure(val)
+            self.exposureChanged.emit()
+
+    # --- УПРАВЛЕНИЕ ПРЕСЕТАМИ ---
+
+    @Slot()
+    def reset_defaults(self):
+        """Сброс к заводским настройкам."""
+        logger.info("Protocol: Restore Default Settings")
+        # Присваивание свойствам автоматически вызовет сеттеры и обновит камеру/UI
+        self.exposureValue = self.DEFAULT_CONFIG["exposure"]
+        self.gainValue = self.DEFAULT_CONFIG["gain"]
+        self.wbRedValue = self.DEFAULT_CONFIG["wb_red"]
+        self._update_status("Сброс настроек")
+
+    @Slot()
+    def save_preset(self):
+        """Сохранение текущих настроек в JSON."""
+        config = {
+            "exposure": self._exposure_value,
+            "gain": self._gain_value,
+            "wb_red": self._wb_red_value
+        }
+        try:
+            with open(self.CONFIG_FILE, 'w') as f:
+                json.dump(config, f, indent=4)
+            logger.info(f"Preset saved to {self.CONFIG_FILE}")
+            self._update_status("Пресет сохранен")
+        except Exception as e:
+            logger.error(f"Save failed: {e}")
+            self._update_status("Ошибка сохранения")
+
+    @Slot()
+    def load_preset(self):
+        """Загрузка настроек из JSON."""
+        if not os.path.exists(self.CONFIG_FILE):
+            logger.warning("Preset file not found")
+            self._update_status("Нет пресетов")
+            return
+
+        try:
+            with open(self.CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+            
+            # Применяем настройки. Сеттеры обновят UI благодаря сигналам
+            if "exposure" in config: self.exposureValue = config["exposure"]
+            if "gain" in config: self.gainValue = config["gain"]
+            if "wb_red" in config: self.wbRedValue = config["wb_red"]
+            
+            logger.info("Preset loaded successfully")
+            self._update_status("Пресет загружен")
+        except Exception as e:
+            logger.error(f"Load failed: {e}")
+            self._update_status("Ошибка загрузки")
 
     @Slot(str, str, int)
     def capture_photo(self, path, fmt, q):

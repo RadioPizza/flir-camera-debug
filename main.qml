@@ -1,10 +1,6 @@
 /*
  * Main Interface (main.qml)
- * * Основной экран управления тепловизионной системой.
- * Оптимизирован для сенсорного управления (Tablet UI).
- * * Структура:
- * - Левая часть: Видеопоток (Image Provider)
- * - Правая часть: Панель управления (Gain, Exposure, WB) и Телеметрия
+ * Основной экран управления тепловизионной системой.
  */
 
 import QtQuick
@@ -42,7 +38,6 @@ ApplicationWindow {
                 id: camView
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectFit
-                // Используем провайдер "live"
                 source: cameraController.imagePath
                 cache: false
                 asynchronous: false
@@ -171,7 +166,78 @@ ApplicationWindow {
                         }
                     }
 
-                    Item { Layout.fillHeight: true } // Пружина-распорка
+                    Item { height: 10 } // Отступ
+
+                    // --- БЛОК КОНФИГУРАЦИИ (НОВЫЙ) ---
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 70
+                        color: "#252525"
+                        radius: 12
+                        border.color: "#333"
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 10
+
+                            // Кнопка СБРОС
+                            Button {
+                                Layout.fillHeight: true
+                                Layout.preferredWidth: 80
+                                onClicked: cameraController.reset_defaults()
+                                background: Rectangle {
+                                    color: parent.down ? "#555" : "#424242"
+                                    radius: 8
+                                    border.color: "#666"
+                                }
+                                contentItem: Column {
+                                    anchors.centerIn: parent
+                                    Text { text: "RESET"; color: "#ff5252"; font.bold: true; font.pixelSize: 12; anchors.horizontalCenter: parent.horizontalCenter }
+                                }
+                            }
+
+                            // Кнопка ЗАГРУЗИТЬ
+                            Button {
+                                Layout.fillHeight: true
+                                Layout.fillWidth: true
+                                onClicked: cameraController.load_preset()
+                                background: Rectangle {
+                                    color: parent.down ? "#333" : "transparent"
+                                    border.color: "#666"
+                                    radius: 8
+                                }
+                                contentItem: Text { 
+                                    text: "LOAD"
+                                    color: "white"
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                    font.bold: true
+                                    font.pixelSize: 14
+                                }
+                            }
+
+                            // Кнопка СОХРАНИТЬ
+                            Button {
+                                Layout.fillHeight: true
+                                Layout.fillWidth: true
+                                onClicked: cameraController.save_preset()
+                                background: Rectangle {
+                                    color: parent.down ? "#333" : "transparent"
+                                    border.color: "#666"
+                                    radius: 8
+                                }
+                                contentItem: Text { 
+                                    text: "SAVE"
+                                    color: "#00e676"
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                    font.bold: true
+                                    font.pixelSize: 14
+                                }
+                            }
+                        }
+                    }
 
                     // --- КНОПКИ УПРАВЛЕНИЯ ---
                     ColumnLayout {
@@ -179,7 +245,7 @@ ApplicationWindow {
                         spacing: 20
 
                         Button {
-                            Layout.fillWidth: true; Layout.preferredHeight: 90
+                            Layout.fillWidth: true; Layout.preferredHeight: 80
                             enabled: cameraController.status === "Камера запущена"
                             onClicked: fileDialog.open()
                             background: Rectangle { 
@@ -195,7 +261,7 @@ ApplicationWindow {
                         }
 
                         Button {
-                            Layout.fillWidth: true; Layout.preferredHeight: 90 
+                            Layout.fillWidth: true; Layout.preferredHeight: 80 
                             visible: cameraController.status !== "Камера запущена"
                             onClicked: cameraController.start_camera()
                             background: Rectangle { color: parent.down ? "#2e7d32" : "#43a047"; radius: 16 }
@@ -207,7 +273,7 @@ ApplicationWindow {
                         }
 
                         Button {
-                            Layout.fillWidth: true; Layout.preferredHeight: 90 
+                            Layout.fillWidth: true; Layout.preferredHeight: 80 
                             visible: cameraController.status === "Камера запущена"
                             onClicked: cameraController.stop_camera()
                             background: Rectangle { color: parent.down ? "#c62828" : "#e53935"; radius: 16 }
