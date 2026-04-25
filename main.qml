@@ -221,26 +221,78 @@ ApplicationWindow {
                     }
 
                     // --- TELEMETRY ---
+                    // --- TELEMETRY ---
                     Rectangle {
-                        Layout.fillWidth: true; Layout.preferredHeight: 100
-                        color: "#252525"; radius: 12; border.color: "#333"
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 20
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 140 // Увеличиваем высоту для новых метрик
+                        color: "#252525"
+                        radius: 12
+                        border.color: "#333"
+
+                        GridLayout {
+                            anchors.fill: parent
+                            anchors.margins: 15
+                            columns: 2
+                            columnSpacing: 10
+                            rowSpacing: 15
+
+                            // 1. Статус камеры
                             ColumnLayout {
                                 Text { text: "STATUS"; color: "#888"; font.pixelSize: 12; font.bold: true }
                                 Text { 
                                     text: cameraController.status === "Камера запущена" ? "ONLINE" : "OFFLINE"
                                     color: cameraController.status === "Камера запущена" ? "#00e676" : "#666" 
-                                    font.pixelSize: 18; font.bold: true
+                                    font.pixelSize: 16; font.bold: true
                                 }
                             }
-                            Item { Layout.fillWidth: true }
-                            RowLayout {
-                                Text { text: "FPS"; color: "#aaa"; font.pixelSize: 18; font.bold: true; verticalAlignment: Text.AlignBottom }
-                                Text {
-                                    text: Math.round(cameraController.currentFps * 10) / 10
-                                    color: cameraController.currentFps > 20 ? "#00e676" : "#ff3d00"
-                                    font.pixelSize: 36; font.bold: true
+
+                            // 2. Разрешение сенсора
+                            ColumnLayout {
+                                Layout.alignment: Qt.AlignRight
+                                Text { text: "RESOLUTION"; color: "#888"; font.pixelSize: 12; font.bold: true; Layout.alignment: Qt.AlignRight }
+                                Text { 
+                                    text: cameraController.resolution
+                                    color: "#00b0ff"
+                                    font.pixelSize: 16; font.bold: true
+                                    Layout.alignment: Qt.AlignRight
+                                }
+                            }
+
+                            // 3. Текущий и Средний FPS
+                            ColumnLayout {
+                                Text { text: "CUR / AVG FPS"; color: "#888"; font.pixelSize: 12; font.bold: true }
+                                RowLayout {
+                                    Text {
+                                        text: cameraController.currentFps.toFixed(1)
+                                        color: cameraController.currentFps > 20 ? "#00e676" : "#ff3d00"
+                                        font.pixelSize: 24; font.bold: true
+                                    }
+                                    Text { text: "/"; color: "#888"; font.pixelSize: 18 }
+                                    Text {
+                                        text: cameraController.averageFps.toFixed(1)
+                                        color: "#ff9100"
+                                        font.pixelSize: 18; font.bold: true
+                                    }
+                                }
+                            }
+
+                            // 4. Заявленный FPS и Эффективность
+                            ColumnLayout {
+                                Layout.alignment: Qt.AlignRight
+                                Text { text: "TARGET / EFFICIENCY"; color: "#888"; font.pixelSize: 12; font.bold: true; Layout.alignment: Qt.AlignRight }
+                                RowLayout {
+                                    Layout.alignment: Qt.AlignRight
+                                    Text {
+                                        text: cameraController.targetFps.toFixed(1)
+                                        color: "#aaa"
+                                        font.pixelSize: 16; font.bold: true
+                                    }
+                                    Text { text: "|"; color: "#888"; font.pixelSize: 16 }
+                                    Text {
+                                        text: cameraController.efficiency.toFixed(1) + "%"
+                                        color: cameraController.efficiency > 90 ? "#00e676" : (cameraController.efficiency > 50 ? "#ff9100" : "#ff3d00")
+                                        font.pixelSize: 18; font.bold: true
+                                    }
                                 }
                             }
                         }

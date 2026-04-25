@@ -2,7 +2,6 @@
 
 """
 Camera Controller Module.
-Версия сборки: 3.0 (Pixel Format Support)
 """
 
 import os
@@ -69,7 +68,10 @@ class CameraWorker(QThread):
     frame_ready = Signal(QImage)
     status_changed = Signal(str)
     error_occurred = Signal(str)
-    fps_updated = Signal(float)
+    
+    # Расширенный сигнал метрик: cur_fps, avg_fps, target_fps, efficiency
+    metrics_updated = Signal(float, float, float, float)
+    resolution_updated = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -103,20 +105,39 @@ class CameraWorker(QThread):
             
             self._apply_initial_settings()
             
+            # --- СБОР ИНФОРМАЦИИ О СЕНСОРЕ ПЕРЕД СТАРТОМ ---
+            target_fps = 0.0
+            try:
+                nodemap = self.camera.GetNodeMap()
+                
+                # Чтение разрешения
+                w_node = PySpin.CIntegerPtr(nodemap.GetNode("Width"))
+                h_node = PySpin.CIntegerPtr(nodemap.GetNode("Height"))
+                if PySpin.IsAvailable(w_node) and PySpin.IsAvailable(h_node):
+                    self.resolution_updated.emit(f"{w_node.GetValue()}x{h_node.GetValue()}")
+
+                # Чтение заявленного аппаратного FPS
+                fps_node = PySpin.CFloatPtr(nodemap.GetNode("AcquisitionResultingFrameRate"))
+                if PySpin.IsAvailable(fps_node):
+                    target_fps = fps_node.GetValue()
+            except Exception as e:
+                logger.warning(f"Failed to read sensor metrics: {e}")
+
             self.camera.BeginAcquisition()
             self.status_changed.emit("Камера запущена")
             self.running = True
             
+            # --- ПЕРЕМЕННЫЕ ДЛЯ МЕТРИК ---
             fps_counter = 0
-            fps_timer = time.time()
+            total_frames = 0
+            start_time = time.time()
+            fps_timer = start_time
             
             while self.running:
-                # Блокировка нужна, чтобы не читать кадр, пока мы меняем PixelFormat
                 with QMutexLocker(self._lock):
                     if not self.running: break
                     
                     try:
-                        # Timeout 1000ms. Если меняем формат, тут может выпасть timeout, это нормально.
                         image_result = self.camera.GetNextImage(1000)
                         
                         if image_result.IsIncomplete():
@@ -127,11 +148,11 @@ class CameraWorker(QThread):
                         if not qimage.isNull():
                             self.frame_ready.emit(qimage)
                             fps_counter += 1
+                            total_frames += 1
                         
                         image_result.Release()
                         
                     except PySpin.SpinnakerException as ex:
-                        # Игнорируем таймауты, которые случаются при смене настроек
                         if "SPINNAKER_ERR_TIMEOUT" not in str(ex):
                             logger.debug(f"Spinnaker Warning: {ex}")
                         continue
@@ -139,11 +160,19 @@ class CameraWorker(QThread):
                         logger.error(f"Frame Error: {e}")
                         continue
 
-                # FPS Calculation outside lock
+                # --- РАСЧЕТ И ОТПРАВКА МЕТРИК ПРОИЗВОДИТЕЛЬНОСТИ ---
                 current_time = time.time()
                 if current_time - fps_timer >= 1.0:
-                    fps = fps_counter / (current_time - fps_timer)
-                    self.fps_updated.emit(fps)
+                    current_fps = fps_counter / (current_time - fps_timer)
+                    elapsed_total = current_time - start_time
+                    avg_fps = total_frames / elapsed_total if elapsed_total > 0 else 0.0
+                    efficiency = (current_fps / target_fps * 100.0) if target_fps > 0 else 0.0
+                    
+                    self.metrics_updated.emit(current_fps, avg_fps, target_fps, efficiency)
+                    
+                    # Логирование в файл
+                    logger.info(f"Метрики | Текущий FPS: {current_fps:.2f} | Средний: {avg_fps:.2f} | Заявленный: {target_fps:.2f} | Эффективность: {efficiency:.1f}% | Формат: {self.pixel_format_str}")
+                    
                     fps_counter = 0
                     fps_timer = current_time
 
@@ -154,9 +183,7 @@ class CameraWorker(QThread):
             self._cleanup()
 
     def _apply_initial_settings(self):
-        """Применяем настройки ПЕРЕД стартом потока."""
         try:
-            # 1. Packet Size
             try:
                 nodemap = self.camera.GetTLStreamNodeMap()
                 node = PySpin.CIntegerPtr(nodemap.GetNode("StreamPacketSize"))
@@ -164,10 +191,7 @@ class CameraWorker(QThread):
                     node.SetValue(min(node.GetMax(), self.packet_size))
             except: pass
 
-            # 2. Pixel Format (Critical Step)
             self.set_pixel_format(self.pixel_format_str, force_restart=False)
-
-            # 3. Sensors
             self.set_exposure(self.exposure_time)
             self.set_gain(self.gain)
             self.set_wb_red(self.wb_red)
@@ -176,30 +200,20 @@ class CameraWorker(QThread):
             logger.error(f"Setup Error: {e}")
 
     def _convert_to_qimage(self, image_result):
-        """Конвертация Raw буфера в QImage."""
         try:
             image_data = image_result.GetNDArray()
-            # Получаем реальный формат кадра (он может отличаться от запрошенного, если ошибка)
             current_format = image_result.GetPixelFormat() 
-            
             rgb = None
             
-            # Логика демозаики и конверсии
             if current_format == PySpin.PixelFormat_Mono8:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2RGB)
-            
             elif current_format == PySpin.PixelFormat_BayerRG8:
-                # BayerRG -> RGB
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_BayerRG2RGB)
-                
             elif current_format == PySpin.PixelFormat_RGB8:
-                rgb = image_data # Уже RGB
-                
+                rgb = image_data
             elif current_format == PySpin.PixelFormat_BGR8:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB)
-                
             else:
-                # Fallback для неизвестных форматов (считаем Mono)
                 if len(image_data.shape) == 2:
                     rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2RGB)
                 else:
@@ -214,24 +228,15 @@ class CameraWorker(QThread):
             logger.error(f"Conversion Error: {e}")
             return QImage()
 
-    # --- HARDWARE CONTROL METHODS ---
-
     def set_pixel_format(self, format_name, force_restart=True):
-        """
-        Меняет формат пикселей.
-        ВАЖНО: Требует остановки Acquisition!
-        """
         if not self.camera: return
 
-        with QMutexLocker(self._lock): # Блокируем цикл run
+        with QMutexLocker(self._lock):
             try:
                 was_streaming = self.camera.IsStreaming()
-                
-                # 1. Stop Stream if needed
                 if was_streaming and force_restart:
                     self.camera.EndAcquisition()
                 
-                # 2. Set Node
                 nodemap = self.camera.GetNodeMap()
                 node_pf = PySpin.CEnumerationPtr(nodemap.GetNode("PixelFormat"))
                 
@@ -244,7 +249,6 @@ class CameraWorker(QThread):
                     else:
                         logger.warning(f"Format {format_name} not supported by sensor")
                 
-                # 3. Restart Stream
                 if was_streaming and force_restart:
                     self.camera.BeginAcquisition()
                     
@@ -263,17 +267,14 @@ class CameraWorker(QThread):
         if self.camera:
             try:
                 nodemap = self.camera.GetNodeMap()
-                # Ensure Auto WB is off
                 wb_auto = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceWhiteAuto"))
                 if PySpin.IsAvailable(wb_auto) and PySpin.IsWritable(wb_auto):
                     wb_auto.SetIntValue(wb_auto.GetEntryByName("Off").GetValue())
                 
-                # Select Red Channel
                 selector = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceRatioSelector"))
                 if PySpin.IsAvailable(selector) and PySpin.IsWritable(selector):
                     selector.SetIntValue(selector.GetEntryByName("Red").GetValue())
                 
-                # Set Value
                 ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
                 if PySpin.IsAvailable(ratio) and PySpin.IsWritable(ratio):
                     ratio.SetValue(value)
@@ -295,7 +296,7 @@ class CameraWorker(QThread):
             except: pass
 
     def capture_photo(self, path, fmt, q):
-        pass # Placeholder
+        pass
 
     def _cleanup(self):
         if self.camera:
@@ -317,22 +318,33 @@ class CameraController(QObject):
     """UI Controller."""
     frameChanged = Signal()
     statusChanged = Signal()
-    currentFpsChanged = Signal()
     imagePathChanged = Signal()
+    
+    # Новые сигналы для метрик
+    currentFpsChanged = Signal()
+    averageFpsChanged = Signal()
+    targetFpsChanged = Signal()
+    efficiencyChanged = Signal()
+    resolutionChanged = Signal()
     
     # Settings Signals
     gainChanged = Signal()
     exposureChanged = Signal()
     wbRedChanged = Signal()
-    pixelFormatChanged = Signal() # NEW
+    pixelFormatChanged = Signal()
 
     def __init__(self):
         super().__init__()
         self._status = "Готов"
-        self._currentFps = 0.0
         self._image_path = ""
         
-        # MAPPING: Index <-> String name
+        # Метрики
+        self._currentFps = 0.0
+        self._averageFps = 0.0
+        self._targetFps = 0.0
+        self._efficiency = 0.0
+        self._resolution = "Неизвестно"
+        
         self.FORMAT_MAP = {0: "Mono8", 1: "RGB8", 2: "BayerRG8"}
         self.FORMAT_MAP_REV = {"Mono8": 0, "RGB8": 1, "BayerRG8": 2}
         
@@ -340,12 +352,11 @@ class CameraController(QObject):
             "exposure": 20000.0,
             "gain": 15.0,
             "wb_red": 1.5,
-            "pixel_format_idx": 0 # Default Mono8
+            "pixel_format_idx": 0
         }
         
         self.CONFIG_FILE = os.path.join(os.path.dirname(__file__), "camera_preset.json")
         
-        # Init Values
         self._gain_value = self.DEFAULT_CONFIG["gain"]
         self._wb_red_value = self.DEFAULT_CONFIG["wb_red"]
         self._exposure_value = self.DEFAULT_CONFIG["exposure"]
@@ -365,7 +376,6 @@ class CameraController(QObject):
         if self.worker and self.worker.isRunning(): return
         self.worker = CameraWorker()
         
-        # Передаем параметры в воркер
         self.worker.exposure_time = self._exposure_value
         self.worker.gain = self._gain_value
         self.worker.wb_red = self._wb_red_value
@@ -373,7 +383,11 @@ class CameraController(QObject):
         
         self.worker.frame_ready.connect(self._on_frame_ready)
         self.worker.status_changed.connect(self._update_status)
-        self.worker.fps_updated.connect(self._update_fps)
+        
+        # Подключаем новые сигналы
+        self.worker.metrics_updated.connect(self._on_metrics_updated)
+        self.worker.resolution_updated.connect(self._on_resolution_updated)
+        
         self.worker.start()
 
     @Slot()
@@ -382,6 +396,7 @@ class CameraController(QObject):
             self.worker.stop()
             self.worker = None
             self._update_status("Остановлено")
+            self._on_metrics_updated(0.0, 0.0, 0.0, 0.0) # Сброс при остановке
 
     def _on_frame_ready(self, qimage):
         if self.provider:
@@ -393,18 +408,40 @@ class CameraController(QObject):
         self._status = msg
         self.statusChanged.emit()
 
-    def _update_fps(self, fps):
-        self._currentFps = fps
+    def _on_metrics_updated(self, cur, avg, tgt, eff):
+        self._currentFps = cur
+        self._averageFps = avg
+        self._targetFps = tgt
+        self._efficiency = eff
         self.currentFpsChanged.emit()
+        self.averageFpsChanged.emit()
+        self.targetFpsChanged.emit()
+        self.efficiencyChanged.emit()
 
-    # --- UI Properties ---
+    def _on_resolution_updated(self, res):
+        self._resolution = res
+        self.resolutionChanged.emit()
 
+    # --- UI Properties для метрик ---
     @Property(str, notify=statusChanged)
     def status(self): return self._status
 
     @Property(float, notify=currentFpsChanged)
     def currentFps(self): return self._currentFps
+    
+    @Property(float, notify=averageFpsChanged)
+    def averageFps(self): return self._averageFps
+    
+    @Property(float, notify=targetFpsChanged)
+    def targetFps(self): return self._targetFps
+    
+    @Property(float, notify=efficiencyChanged)
+    def efficiency(self): return self._efficiency
+    
+    @Property(str, notify=resolutionChanged)
+    def resolution(self): return self._resolution
 
+    # --- Properties настроек камеры ---
     @Property(float, notify=gainChanged)
     def gainValue(self): return self._gain_value
     @gainValue.setter
@@ -432,7 +469,6 @@ class CameraController(QObject):
             if self.worker: self.worker.set_exposure(val)
             self.exposureChanged.emit()
 
-    # --- NEW PROPERTY: PIXEL FORMAT ---
     @Property(int, notify=pixelFormatChanged)
     def pixelFormatIndex(self): 
         return self._pixel_format_index
@@ -450,7 +486,6 @@ class CameraController(QObject):
             self.pixelFormatChanged.emit()
 
     # --- PRESETS MANAGEMENT ---
-
     @Slot()
     def reset_defaults(self):
         self.exposureValue = self.DEFAULT_CONFIG["exposure"]
@@ -465,7 +500,7 @@ class CameraController(QObject):
             "exposure": self._exposure_value,
             "gain": self._gain_value,
             "wb_red": self._wb_red_value,
-            "pixel_format_idx": self._pixel_format_index # Save format
+            "pixel_format_idx": self._pixel_format_index
         }
         try:
             with open(self.CONFIG_FILE, 'w') as f:
