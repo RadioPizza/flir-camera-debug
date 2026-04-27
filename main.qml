@@ -171,6 +171,29 @@ ApplicationWindow {
                             onMoved: cameraController.wbRedValue = value
                         }
                     }
+                    
+                    // --- SLIDER 4: GAMMA (CONTRAСТ) ---
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text { 
+                                text: "Гамма (Контраст)"
+                                color: "white"; font.pixelSize: 16; font.bold: true
+                                Layout.fillWidth: true; elide: Text.ElideRight
+                            }
+                            Text { 
+                                text: cameraController.gammaValue.toFixed(2)
+                                color: "#e040fb"; font.pixelSize: 16; font.bold: true 
+                            }
+                        }
+                        Slider {
+                            Layout.fillWidth: true; Layout.preferredHeight: 32
+                            from: 0.5; to: 3.0; value: cameraController.gammaValue
+                            onMoved: cameraController.gammaValue = value
+                        }
+                    }
 
                     Item { Layout.preferredHeight: 10 }
 

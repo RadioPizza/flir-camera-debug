@@ -83,6 +83,7 @@ class CameraWorker(QThread):
         self.exposure_time = 20000.0
         self.gain = 10.0
         self.wb_red = 1.20
+        self.gamma = 1.0
         self.wb_auto = False
         self.pixel_format_str = "BayerRG8"
         
@@ -178,10 +179,11 @@ class CameraWorker(QThread):
             except: pass
 
             self.set_pixel_format(self.pixel_format_str, force_restart=False)
-            self.set_exposure(self.exposure_time) # 20000
-            self.set_gain(self.gain) # 10
-            self.set_wb_auto(False) # Отключаем автобаланс
-            self.set_wb_red(self.wb_red) # 1.10
+            self.set_exposure(self.exposure_time) 
+            self.set_gain(self.gain)
+            self.set_gamma(self.gamma)
+            self.set_wb_auto(False) 
+            self.set_wb_red(self.wb_red) 
             
         except Exception as e:
             logger.error(f"Setup Error: {e}")
@@ -229,6 +231,23 @@ class CameraWorker(QThread):
                 if was_streaming and force_restart:
                     self.camera.BeginAcquisition()
             except Exception as e: pass
+    
+    def set_gamma(self, value):
+        if self.camera:
+            try:
+                nodemap = self.camera.GetNodeMap()
+                
+                # В камерах FLIR узел Gamma часто требует явного включения
+                gamma_enable = PySpin.CBooleanPtr(nodemap.GetNode("GammaEnable"))
+                if PySpin.IsAvailable(gamma_enable) and PySpin.IsWritable(gamma_enable):
+                    gamma_enable.SetValue(True)
+                
+                node = PySpin.CFloatPtr(nodemap.GetNode("Gamma"))
+                if PySpin.IsAvailable(node) and PySpin.IsWritable(node):
+                    val = max(node.GetMin(), min(value, node.GetMax()))
+                    node.SetValue(val)
+            except Exception as e: 
+                pass
 
     def set_gain(self, value):
         if self.camera:
@@ -309,6 +328,7 @@ class CameraController(QObject):
     wbRedChanged = Signal()
     wbAutoChanged = Signal()
     pixelFormatChanged = Signal()
+    gammaChanged = Signal()
 
     def __init__(self):
         super().__init__()
@@ -327,6 +347,7 @@ class CameraController(QObject):
             "exposure": 20000.0,
             "gain": 10.0,
             "wb_red": 1.20,
+            "gamma": 1.0,
             "wb_auto": False,
             "pixel_format_idx": 2 # BayerRG8 (RAW Цвет) по умолчанию
         }
@@ -335,6 +356,7 @@ class CameraController(QObject):
         self._gain_value = self.DEFAULT_CONFIG["gain"]
         self._wb_red_value = self.DEFAULT_CONFIG["wb_red"]
         self._wb_auto = self.DEFAULT_CONFIG["wb_auto"]
+        self._gamma_value = self.DEFAULT_CONFIG["gamma"]
         self._exposure_value = self.DEFAULT_CONFIG["exposure"]
         self._pixel_format_index = self.DEFAULT_CONFIG["pixel_format_idx"]
         
@@ -354,6 +376,7 @@ class CameraController(QObject):
         self.worker.exposure_time = self._exposure_value
         self.worker.gain = self._gain_value
         self.worker.wb_red = self._wb_red_value
+        self.worker.gamma = self._gamma_value
         self.worker.wb_auto = self._wb_auto
         self.worker.pixel_format_str = self.FORMAT_MAP.get(self._pixel_format_index, "BayerRG8")
         
@@ -425,6 +448,15 @@ class CameraController(QObject):
             self._wb_red_value = val
             if self.worker: self.worker.set_wb_red(val)
             self.wbRedChanged.emit()
+    
+    @Property(float, notify=gammaChanged)
+    def gammaValue(self): return self._gamma_value
+    @gammaValue.setter
+    def gammaValue(self, val):
+        if self._gamma_value != val:
+            self._gamma_value = val
+            if self.worker: self.worker.set_gamma(val)
+            self.gammaChanged.emit()
 
     @Property(float, notify=exposureChanged)
     def exposureValue(self): return self._exposure_value
@@ -461,13 +493,15 @@ class CameraController(QObject):
         self.wbAuto = self.DEFAULT_CONFIG["wb_auto"]
         self.pixelFormatIndex = self.DEFAULT_CONFIG["pixel_format_idx"]
         self._update_status("Сброс настроек")
+        self.gammaValue = self.DEFAULT_CONFIG["gamma"]
 
     @Slot()
     def save_preset(self):
         config = {
             "exposure": self._exposure_value, "gain": self._gain_value,
             "wb_red": self._wb_red_value, "pixel_format_idx": self._pixel_format_index,
-            "wb_auto": self._wb_auto
+            "wb_auto": self._wb_auto,
+            "gamma": self._gamma_value
         }
         try:
             with open(self.CONFIG_FILE, 'w') as f: json.dump(config, f, indent=4)
@@ -485,6 +519,7 @@ class CameraController(QObject):
             self.pixelFormatIndex = config.get("pixel_format_idx", self._pixel_format_index)
             self.wbAuto = config.get("wb_auto", False)
             self._update_status("Пресет загружен")
+            self.gammaValue = config.get("gamma", self._gamma_value)
         except: pass
 
     @Slot(str, str, int)
