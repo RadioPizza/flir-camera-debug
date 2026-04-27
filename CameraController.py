@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Camera Controller Module for FLIR Blackfly S.
-Реализовано: ручное управление Gain, Exposure, WB Red.
-Исправлено: Red/Blue swap для BayerRG8.
+Camera Controller Module for FLIR Blackfly S.   
 """
 
 import os
@@ -17,7 +15,7 @@ import PySpin
 
 from PySide6.QtCore import (
     QObject, Signal, Property, QThread, 
-    Slot, QMutex, QMutexLocker
+    Slot, QMutex, QMutexLocker, QUrl
 )
 from PySide6.QtGui import QImage, QColor
 from PySide6.QtQuick import QQuickImageProvider
@@ -72,6 +70,7 @@ class CameraWorker(QThread):
     error_occurred = Signal(str)
     metrics_updated = Signal(float, float, float, float)
     resolution_updated = Signal(str)
+    wb_red_calculated = Signal(float) # Сигнал для обновления ползунка АВТО
 
     def __init__(self):
         super().__init__()
@@ -79,7 +78,7 @@ class CameraWorker(QThread):
         self.system = None
         self.running = False
         
-        # Ручные параметры сенсора (согласно заданию)
+        # Ручные параметры сенсора
         self.exposure_time = 20000.0
         self.gain = 10.0
         self.wb_red = 1.20
@@ -104,7 +103,6 @@ class CameraWorker(QThread):
             self.camera = cam_list.GetByIndex(0)
             self.camera.Init()
             
-            # Применение настроек при старте
             self._apply_initial_settings()
             
             target_fps = 0.0
@@ -149,7 +147,6 @@ class CameraWorker(QThread):
                     except Exception as e:
                         continue
 
-                # Расчет телеметрии
                 current_time = time.time()
                 if current_time - fps_timer >= 1.0:
                     current_fps = fps_counter / (current_time - fps_timer)
@@ -168,9 +165,7 @@ class CameraWorker(QThread):
             self._cleanup()
 
     def _apply_initial_settings(self):
-        """Установка аппаратных параметров при инициализации."""
         try:
-            # Настройка пакетов для GigE (Jumbo Frames)
             try:
                 nodemap = self.camera.GetTLStreamNodeMap()
                 node = PySpin.CIntegerPtr(nodemap.GetNode("StreamPacketSize"))
@@ -182,14 +177,23 @@ class CameraWorker(QThread):
             self.set_exposure(self.exposure_time) 
             self.set_gain(self.gain)
             self.set_gamma(self.gamma)
-            self.set_wb_auto(False) 
-            self.set_wb_red(self.wb_red) 
+            
+            # Если автобаланс выключен - применяем ручные настройки
+            if not self.wb_auto:
+                self.set_wb_red(self.wb_red)
+                
+            # Аппаратный автобаланс всегда выключаем, так как используем свой алгоритм
+            try:
+                nodemap = self.camera.GetNodeMap()
+                wb_auto = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceWhiteAuto"))
+                if PySpin.IsAvailable(wb_auto) and PySpin.IsWritable(wb_auto):
+                    wb_auto.SetIntValue(wb_auto.GetEntryByName("Off").GetValue())
+            except: pass
             
         except Exception as e:
             logger.error(f"Setup Error: {e}")
 
     def _convert_to_qimage(self, image_result):
-        """Конвертация Bayer/Mono в QImage с исправлением Red/Blue swap."""
         try:
             image_data = image_result.GetNDArray()
             current_format = image_result.GetPixelFormat() 
@@ -198,12 +202,59 @@ class CameraWorker(QThread):
             if current_format == PySpin.PixelFormat_Mono8:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2RGB)
             elif current_format == PySpin.PixelFormat_BayerRG8:
-                # Физическое исправление синего оттенка за счет смены каналов в OpenCV
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_BayerRG2BGR)
             elif current_format == PySpin.PixelFormat_RGB8:
                 rgb = image_data
             else:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2RGB) if len(image_data.shape) == 2 else image_data
+
+            
+            # === ГИБРИДНЫЙ АВТОБАЛАНС БЕЛОГО ===
+            if hasattr(self, 'wb_auto') and self.wb_auto:
+                current_time = time.time()
+                if not hasattr(self, '_last_awb_time'):
+                    self._last_awb_time = 0
+                    
+                if current_time - self._last_awb_time > 1.5:
+                    self._last_awb_time = current_time
+                    
+                    # ИСПРАВЛЕНИЕ: Индексы массива физически соответствуют RGB 
+                    # (0-Red, 1-Green, 2-Blue), так как мы инвертировали их ранее для QImage
+                    avg_r = float(np.mean(rgb[:, :, 0]))
+                    avg_g = float(np.mean(rgb[:, :, 1]))
+                    avg_b = float(np.mean(rgb[:, :, 2]))
+                    
+                    if avg_r > 5 and avg_b > 5:
+                        try:
+                            nodemap = self.camera.GetNodeMap()
+                            ratio_node = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
+                            selector = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceRatioSelector"))
+                            
+                            # Вычисляем и применяем Красный канал
+                            selector.SetIntValue(selector.GetEntryByName("Red").GetValue())
+                            current_red = ratio_node.GetValue()
+                            target_red = current_red * (avg_g / avg_r)
+                            
+                            # Вычисляем и применяем Синий канал
+                            selector.SetIntValue(selector.GetEntryByName("Blue").GetValue())
+                            current_blue = ratio_node.GetValue()
+                            target_blue = current_blue * (avg_g / avg_b)
+                            
+                            # Демпфирование для плавности перехода (50%)
+                            new_red = current_red * 0.5 + target_red * 0.5
+                            new_blue = current_blue * 0.5 + target_blue * 0.5
+                            
+                            # Запись в регистры камеры
+                            selector.SetIntValue(selector.GetEntryByName("Red").GetValue())
+                            ratio_node.SetValue(min(ratio_node.GetMax(), max(ratio_node.GetMin(), new_red)))
+                            
+                            selector.SetIntValue(selector.GetEntryByName("Blue").GetValue())
+                            ratio_node.SetValue(min(ratio_node.GetMax(), max(ratio_node.GetMin(), new_blue)))
+                            
+                            # Отправляем обновленное значение красного канала в UI для ползунка
+                            self.wb_red_calculated.emit(new_red)
+                        except Exception as e:
+                            pass
 
             h, w, ch = rgb.shape
             bytes_per_line = ch * w
@@ -230,24 +281,20 @@ class CameraWorker(QThread):
                 
                 if was_streaming and force_restart:
                     self.camera.BeginAcquisition()
-            except Exception as e: pass
+            except: pass
     
     def set_gamma(self, value):
         if self.camera:
             try:
                 nodemap = self.camera.GetNodeMap()
-                
-                # В камерах FLIR узел Gamma часто требует явного включения
                 gamma_enable = PySpin.CBooleanPtr(nodemap.GetNode("GammaEnable"))
                 if PySpin.IsAvailable(gamma_enable) and PySpin.IsWritable(gamma_enable):
                     gamma_enable.SetValue(True)
                 
                 node = PySpin.CFloatPtr(nodemap.GetNode("Gamma"))
                 if PySpin.IsAvailable(node) and PySpin.IsWritable(node):
-                    val = max(node.GetMin(), min(value, node.GetMax()))
-                    node.SetValue(val)
-            except Exception as e: 
-                pass
+                    node.SetValue(max(node.GetMin(), min(value, node.GetMax())))
+            except: pass
 
     def set_gain(self, value):
         if self.camera:
@@ -271,14 +318,9 @@ class CameraWorker(QThread):
             except: pass
 
     def set_wb_red(self, value):
-        if self.camera:
+        if self.camera and not self.wb_auto:
             try:
                 nodemap = self.camera.GetNodeMap()
-                # Принудительное выключение AWB для работы ручного режима
-                wb_auto = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceWhiteAuto"))
-                if PySpin.IsAvailable(wb_auto) and PySpin.IsWritable(wb_auto):
-                    wb_auto.SetIntValue(wb_auto.GetEntryByName("Off").GetValue())
-                
                 selector = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceRatioSelector"))
                 if PySpin.IsAvailable(selector) and PySpin.IsWritable(selector):
                     selector.SetIntValue(selector.GetEntryByName("Red").GetValue())
@@ -287,15 +329,6 @@ class CameraWorker(QThread):
                 if PySpin.IsAvailable(ratio) and PySpin.IsWritable(ratio):
                     ratio.SetValue(value)
             except: pass
-
-    def set_wb_auto(self, is_auto):
-        if not self.camera: return
-        try:
-            nodemap = self.camera.GetNodeMap()
-            wb_auto = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceWhiteAuto"))
-            if PySpin.IsAvailable(wb_auto) and PySpin.IsWritable(wb_auto):
-                wb_auto.SetIntValue(wb_auto.GetEntryByName("Off").GetValue())
-        except: pass
 
     def _cleanup(self):
         if self.camera:
@@ -342,14 +375,13 @@ class CameraController(QObject):
         
         self.FORMAT_MAP = {0: "Mono8", 1: "RGB8", 2: "BayerRG8"}
         
-        # Конфигурация согласно последнему распоряжению
         self.DEFAULT_CONFIG = {
             "exposure": 20000.0,
             "gain": 10.0,
             "wb_red": 1.20,
             "gamma": 1.0,
-            "wb_auto": False,
-            "pixel_format_idx": 2 # BayerRG8 (RAW Цвет) по умолчанию
+            "wb_auto": True, # АВТО включено по умолчанию
+            "pixel_format_idx": 2 
         }
         
         self.CONFIG_FILE = os.path.join(os.path.dirname(__file__), "camera_preset.json")
@@ -384,6 +416,7 @@ class CameraController(QObject):
         self.worker.status_changed.connect(self._update_status)
         self.worker.metrics_updated.connect(self._on_metrics_updated)
         self.worker.resolution_updated.connect(self._on_resolution_updated)
+        self.worker.wb_red_calculated.connect(self._on_wb_red_calculated) # Подключаем новый сигнал
         self.worker.start()
 
     @Slot()
@@ -417,6 +450,11 @@ class CameraController(QObject):
     def _on_resolution_updated(self, res):
         self._resolution = res
         self.resolutionChanged.emit()
+        
+    def _on_wb_red_calculated(self, val):
+        """Слот: обновляет UI при авторасчете баланса белого"""
+        self._wb_red_value = val
+        self.wbRedChanged.emit()
 
     @Property(str, notify=statusChanged)
     def status(self): return self._status
@@ -446,7 +484,8 @@ class CameraController(QObject):
     def wbRedValue(self, val):
         if self._wb_red_value != val:
             self._wb_red_value = val
-            if self.worker: self.worker.set_wb_red(val)
+            if self.worker and not self._wb_auto: 
+                self.worker.set_wb_red(val)
             self.wbRedChanged.emit()
     
     @Property(float, notify=gammaChanged)
@@ -473,7 +512,11 @@ class CameraController(QObject):
     def wbAuto(self, val):
         if self._wb_auto != val:
             self._wb_auto = val
-            if self.worker: self.worker.set_wb_auto(val)
+            if self.worker: 
+                self.worker.wb_auto = val
+                # При отключении авто - фиксируем последнее вычисленное значение в железо
+                if not val:
+                    self.worker.set_wb_red(self._wb_red_value)
             self.wbAutoChanged.emit()
 
     @Property(int, notify=pixelFormatChanged)
@@ -492,16 +535,15 @@ class CameraController(QObject):
         self.wbRedValue = self.DEFAULT_CONFIG["wb_red"]
         self.wbAuto = self.DEFAULT_CONFIG["wb_auto"]
         self.pixelFormatIndex = self.DEFAULT_CONFIG["pixel_format_idx"]
-        self._update_status("Сброс настроек")
         self.gammaValue = self.DEFAULT_CONFIG["gamma"]
+        self._update_status("Сброс настроек")
 
     @Slot()
     def save_preset(self):
         config = {
             "exposure": self._exposure_value, "gain": self._gain_value,
             "wb_red": self._wb_red_value, "pixel_format_idx": self._pixel_format_index,
-            "wb_auto": self._wb_auto,
-            "gamma": self._gamma_value
+            "wb_auto": self._wb_auto, "gamma": self._gamma_value
         }
         try:
             with open(self.CONFIG_FILE, 'w') as f: json.dump(config, f, indent=4)
@@ -517,10 +559,31 @@ class CameraController(QObject):
             self.gainValue = config.get("gain", self._gain_value)
             self.wbRedValue = config.get("wb_red", self._wb_red_value)
             self.pixelFormatIndex = config.get("pixel_format_idx", self._pixel_format_index)
-            self.wbAuto = config.get("wb_auto", False)
-            self._update_status("Пресет загружен")
+            self.wbAuto = config.get("wb_auto", True)
             self.gammaValue = config.get("gamma", self._gamma_value)
+            self._update_status("Пресет загружен")
         except: pass
 
     @Slot(str, str, int)
-    def capture_photo(self, path, fmt, q): pass
+    def capture_photo(self, file_url, fmt, q):
+        # Безопасная кроссплатформенная конвертация URL в системный путь
+        path = QUrl(file_url).toLocalFile()
+        if not path:
+            path = file_url.replace("file:///", "").replace("file://", "")
+
+        if self.provider:
+            # Блокируем мьютекс только на время копирования кадра в память,
+            # чтобы не задерживать видеопоток (Zero-Copy защита)
+            with QMutexLocker(self.provider.mutex):
+                img = self.provider._current_image.copy()
+            
+            if not img.isNull():
+                success = img.save(path, fmt.upper(), q)
+                if success:
+                    logger.info(f"Снимок сохранен: {path}")
+                    self._update_status("Снимок сохранен")
+                else:
+                    logger.error(f"Ошибка записи: {path}")
+                    self._update_status("Ошибка сохранения")
+            else:
+                self._update_status("Нет кадра")

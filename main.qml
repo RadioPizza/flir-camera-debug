@@ -156,22 +156,41 @@ ApplicationWindow {
                         RowLayout {
                             Layout.fillWidth: true
                             Text { 
-                                text: "Баланс (Красный)"
+                                text: "Баланс белого"
                                 color: "white"; font.pixelSize: 16; font.bold: true
                                 Layout.fillWidth: true; elide: Text.ElideRight
                             }
-                            Text { 
-                                text: cameraController.wbRedValue.toFixed(2)
-                                color: "#ff9100"; font.pixelSize: 16; font.bold: true 
+                            Switch {
+                                text: "АВТО"
+                                checked: cameraController.wbAuto
+                                onCheckedChanged: cameraController.wbAuto = checked
+                                Material.accent: Material.LightGreen
                             }
                         }
+                        
+                        RowLayout {
+                            Layout.fillWidth: true
+                            opacity: cameraController.wbAuto ? 0.4 : 1.0
+                            Text { 
+                                text: "Красный канал"
+                                color: "#aaa"; font.pixelSize: 14
+                                Layout.fillWidth: true
+                            }
+                            Text { 
+                                text: cameraController.wbRedValue.toFixed(2)
+                                color: cameraController.wbAuto ? "#aaa" : "#ff9100"
+                                font.pixelSize: 16; font.bold: true 
+                            }
+                        }
+                        
                         Slider {
                             Layout.fillWidth: true; Layout.preferredHeight: 32
                             from: 0.8; to: 3.0; value: cameraController.wbRedValue
+                            enabled: !cameraController.wbAuto
                             onMoved: cameraController.wbRedValue = value
                         }
                     }
-                    
+
                     // --- SLIDER 4: GAMMA (CONTRAСТ) ---
                     ColumnLayout {
                         Layout.fillWidth: true
@@ -323,10 +342,16 @@ ApplicationWindow {
     FileDialog {
         id: fileDialog
         title: "Сохранить кадр"
+        fileMode: FileDialog.SaveFile  // <--- ПЕРЕВОДИМ В РЕЖИМ СОХРАНЕНИЯ
+        nameFilters: ["JPEG Image (*.jpg)", "PNG Image (*.png)"]
+        defaultSuffix: "jpg"
         currentFolder: StandardPaths.standardLocations(StandardPaths.PicturesLocation)[0]
+        
         onAccepted: {
-            var path = selectedFile.toString().replace(/^(file:\/{3})|(file:)/, "")
-            cameraController.capture_photo(path, "JPEG", 95)
+            var url = selectedFile.toString()
+            // Автоматическое определение формата по расширению
+            var fmt = url.toLowerCase().endsWith(".png") ? "PNG" : "JPEG"
+            cameraController.capture_photo(url, fmt, 95)
         }
     }
 }
