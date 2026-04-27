@@ -1,5 +1,6 @@
 /*
  * Main Interface (main.qml)
+ * Исправлена компоновка полей и перенос текста в телеметрии
  */
 
 import QtQuick
@@ -47,7 +48,10 @@ ApplicationWindow {
                 spacing: 15
                 Text {
                     text: "NO SIGNAL"
-                    color: "#333"; font.pixelSize: 48; font.bold: true; anchors.horizontalCenter: parent.horizontalCenter
+                    color: "#333"
+                    font.pixelSize: 48
+                    font.bold: true
+                    anchors.horizontalCenter: parent.horizontalCenter
                 }
             }
         }
@@ -58,7 +62,10 @@ ApplicationWindow {
             Layout.fillHeight: true
             color: "#1e1e1e"
             
-            Rectangle { width: 2; height: parent.height; color: "#333"; anchors.left: parent.left }
+            Rectangle { 
+                width: 2; height: parent.height; 
+                color: "#333"; anchors.left: parent.left 
+            }
 
             ScrollView {
                 anchors.fill: parent
@@ -66,42 +73,31 @@ ApplicationWindow {
                 clip: true
 
                 ColumnLayout {
-                    width: parent.width - 40
+                    // ИСПРАВЛЕНИЕ: Используем всю ширину ScrollView
+                    width: parent.width 
                     spacing: 25
 
-                    Text { text: "НАСТРОЙКИ СЕНСОРА"; color: "#666"; font.pixelSize: 16; font.bold: true }
+                    Text { 
+                        text: "НАСТРОЙКИ СЕНСОРА"
+                        color: "#666"; font.pixelSize: 14; font.bold: true 
+                    }
 
-                    // --- PIXEL FORMAT SELECTOR (NEW) ---
+                    // --- PIXEL FORMAT SELECTOR ---
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 10
-                        Text { text: "Формат пикселей"; color: "white"; font.pixelSize: 18; font.bold: true }
+                        spacing: 8
+                        Text { 
+                            text: "Формат пикселей"
+                            color: "white"; font.pixelSize: 16; font.bold: true 
+                        }
                         
                         ComboBox {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 50
-                            // 0=Mono8, 1=RGB8, 2=BayerRG8
+                            Layout.preferredHeight: 45
                             model: ["Mono8 (Ч/Б Быстрый)", "RGB8 (Цвет Обработанный)", "BayerRG8 (RAW Цвет)"]
                             currentIndex: cameraController.pixelFormatIndex
-                            
-                            font.pixelSize: 16
-                            
-                            delegate: ItemDelegate {
-                                text: modelData
-                                width: parent.width
-                                contentItem: Text {
-                                    text: modelData
-                                    color: highlighted ? Material.accent : "white"
-                                    font.pixelSize: 16
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                background: Rectangle { color: highlighted ? "#333" : "transparent" }
-                            }
-                            
-                            // При изменении отправляем индекс в контроллер
-                            onActivated: (index) => {
-                                cameraController.pixelFormatIndex = index
-                            }
+                            font.pixelSize: 14
+                            onActivated: (index) => cameraController.pixelFormatIndex = index
                         }
                     }
 
@@ -110,15 +106,21 @@ ApplicationWindow {
                     // --- SLIDER 1: GAIN ---
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 15
+                        spacing: 10
                         RowLayout {
-                            Text { text: "Усиление (Gain)"; color: "white"; font.pixelSize: 18; font.bold: true }
-                            Item { Layout.fillWidth: true }
-                            Text { text: cameraController.gainValue.toFixed(1) + " dB"; color: "#00e676"; font.pixelSize: 18; font.bold: true }
+                            Layout.fillWidth: true
+                            Text { 
+                                text: "Усиление (Gain)"
+                                color: "white"; font.pixelSize: 16; font.bold: true
+                                Layout.fillWidth: true; elide: Text.ElideRight
+                            }
+                            Text { 
+                                text: cameraController.gainValue.toFixed(1) + " dB"
+                                color: "#00e676"; font.pixelSize: 16; font.bold: true 
+                            }
                         }
                         Slider {
-                            id: gainSlider
-                            Layout.fillWidth: true; Layout.preferredHeight: 40
+                            Layout.fillWidth: true; Layout.preferredHeight: 32
                             from: 0.0; to: 40.0; value: cameraController.gainValue
                             onMoved: cameraController.gainValue = value
                         }
@@ -127,173 +129,164 @@ ApplicationWindow {
                     // --- SLIDER 2: EXPOSURE ---
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 15
+                        spacing: 10
                         RowLayout {
-                            Text { text: "Выдержка"; color: "white"; font.pixelSize: 18; font.bold: true }
-                            Item { Layout.fillWidth: true }
-                            Text { text: Math.round(cameraController.exposureValue) + " µs"; color: "#00b0ff"; font.pixelSize: 18; font.bold: true }
+                            Layout.fillWidth: true
+                            Text { 
+                                text: "Выдержка"
+                                color: "white"; font.pixelSize: 16; font.bold: true
+                                Layout.fillWidth: true; elide: Text.ElideRight
+                            }
+                            Text { 
+                                text: Math.round(cameraController.exposureValue) + " µs"
+                                color: "#00b0ff"; font.pixelSize: 16; font.bold: true 
+                            }
                         }
                         Slider {
-                            id: expSlider
-                            Layout.fillWidth: true; Layout.preferredHeight: 40
+                            Layout.fillWidth: true; Layout.preferredHeight: 32
                             from: 1000.0; to: 50000.0; value: cameraController.exposureValue
                             onMoved: cameraController.exposureValue = value
                         }
                     }
 
-
-                    // --- WB CONTROL ---
+                    // --- SLIDER 3: WHITE BALANCE (RED) ---
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 15
+                        spacing: 10
                         RowLayout {
-                            Text { text: "Баланс (Красный)"; color: "white"; font.pixelSize: 18; font.bold: true }
-                            Item { Layout.fillWidth: true }
+                            Layout.fillWidth: true
+                            Text { 
+                                text: "Баланс (Красный)"
+                                color: "white"; font.pixelSize: 16; font.bold: true
+                                Layout.fillWidth: true; elide: Text.ElideRight
+                            }
                             Text { 
                                 text: cameraController.wbRedValue.toFixed(2)
-                                color: "#ff9100"; font.pixelSize: 18; font.bold: true 
+                                color: "#ff9100"; font.pixelSize: 16; font.bold: true 
                             }
                         }
                         Slider {
-                            id: wbSlider
-                            Layout.fillWidth: true; Layout.preferredHeight: 40
+                            Layout.fillWidth: true; Layout.preferredHeight: 32
                             from: 0.8; to: 3.0; value: cameraController.wbRedValue
                             onMoved: cameraController.wbRedValue = value
                         }
                     }
 
-                    Item { height: 10 }
+                    Item { Layout.preferredHeight: 10 }
 
                     // --- CONFIG BUTTONS ---
-                    Rectangle {
-                        Layout.fillWidth: true; Layout.preferredHeight: 70
-                        color: "#252525"; radius: 12; border.color: "#333"
-
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 10; spacing: 10
-                            Button {
-                                Layout.fillHeight: true; Layout.preferredWidth: 80
-                                onClicked: cameraController.reset_defaults()
-                                contentItem: Text { text: "RESET"; color: "#ff5252"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                                background: Rectangle { color: parent.down ? "#555" : "#424242"; radius: 8 }
-                            }
-                            Button {
-                                Layout.fillHeight: true; Layout.fillWidth: true
-                                onClicked: cameraController.load_preset()
-                                contentItem: Text { text: "LOAD"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                                background: Rectangle { color: parent.down ? "#333" : "transparent"; border.color: "#666"; radius: 8 }
-                            }
-                            Button {
-                                Layout.fillHeight: true; Layout.fillWidth: true
-                                onClicked: cameraController.save_preset()
-                                contentItem: Text { text: "SAVE"; color: "#00e676"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                                background: Rectangle { color: parent.down ? "#333" : "transparent"; border.color: "#666"; radius: 8 }
-                            }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Button {
+                            text: "RESET"; Layout.fillWidth: true
+                            onClicked: cameraController.reset_defaults()
+                            Material.foreground: Material.Red
+                        }
+                        Button {
+                            text: "LOAD"; Layout.fillWidth: true
+                            onClicked: cameraController.load_preset()
+                        }
+                        Button {
+                            text: "SAVE"; Layout.fillWidth: true
+                            onClicked: cameraController.save_preset()
+                            Material.foreground: Material.Green
                         }
                     }
 
                     // --- MAIN ACTIONS ---
-                    ColumnLayout {
-                        Layout.fillWidth: true; spacing: 15
+                    Button {
+                        text: "СНИМОК"
+                        Layout.fillWidth: true; Layout.preferredHeight: 55
+                        enabled: cameraController.status === "Камера запущена"
+                        onClicked: fileDialog.open()
+                        Material.background: Material.Blue
+                    }
 
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 10
                         Button {
-                            Layout.fillWidth: true; Layout.preferredHeight: 60
-                            enabled: cameraController.status === "Камера запущена"
-                            onClicked: fileDialog.open()
-                            background: Rectangle { color: parent.down ? "#1565c0" : "#2196f3"; radius: 12; opacity: parent.enabled ? 1 : 0.3 }
-                            contentItem: Text { text: "СНИМОК"; font.bold: true; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            text: "СТАРТ"; Layout.fillWidth: true; Layout.preferredHeight: 55
+                            visible: cameraController.status !== "Камера запущена"
+                            onClicked: cameraController.start_camera()
+                            Material.background: Material.Green
                         }
-
-                        RowLayout {
-                            Layout.fillWidth: true; spacing: 10
-                            Button {
-                                Layout.fillWidth: true; Layout.preferredHeight: 60
-                                visible: cameraController.status !== "Камера запущена"
-                                onClicked: cameraController.start_camera()
-                                background: Rectangle { color: parent.down ? "#2e7d32" : "#43a047"; radius: 12 }
-                                contentItem: Text { text: "СТАРТ"; font.bold: true; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            }
-                            Button {
-                                Layout.fillWidth: true; Layout.preferredHeight: 60
-                                visible: cameraController.status === "Камера запущена"
-                                onClicked: cameraController.stop_camera()
-                                background: Rectangle { color: parent.down ? "#c62828" : "#e53935"; radius: 12 }
-                                contentItem: Text { text: "СТОП"; font.bold: true; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            }
+                        Button {
+                            text: "СТОП"; Layout.fillWidth: true; Layout.preferredHeight: 55
+                            visible: cameraController.status === "Камера запущена"
+                            onClicked: cameraController.stop_camera()
+                            Material.background: Material.Red
                         }
                     }
 
                     // --- TELEMETRY ---
                     Rectangle {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 140
-                        color: "#252525"
-                        radius: 12
-                        border.color: "#333"
+                        Layout.preferredHeight: 160
+                        color: "#252525"; radius: 10; border.color: "#333"
 
                         GridLayout {
-                            anchors.fill: parent
-                            anchors.margins: 15
-                            columns: 2
-                            columnSpacing: 10
-                            rowSpacing: 15
+                            anchors.fill: parent; anchors.margins: 12
+                            columns: 2; rowSpacing: 12; columnSpacing: 10
 
-                            // Статус камеры
                             ColumnLayout {
-                                Text { text: "STATUS"; color: "#888"; font.pixelSize: 12; font.bold: true }
+                                Text { text: "STATUS"; color: "#666"; font.pixelSize: 11; font.bold: true }
                                 Text { 
                                     text: cameraController.status === "Камера запущена" ? "ONLINE" : "OFFLINE"
-                                    color: cameraController.status === "Камера запущена" ? "#00e676" : "#666" 
-                                    font.pixelSize: 16; font.bold: true
+                                    color: cameraController.status === "Камера запущена" ? "#00e676" : "#666"
+                                    font.pixelSize: 14; font.bold: true
                                 }
                             }
 
-                            // Разрешение сенсора
                             ColumnLayout {
                                 Layout.alignment: Qt.AlignRight
-                                Text { text: "RESOLUTION"; color: "#888"; font.pixelSize: 12; font.bold: true; Layout.alignment: Qt.AlignRight }
+                                Text { 
+                                    text: "RESOLUTION"; color: "#666"; font.pixelSize: 11; 
+                                    font.bold: true; Layout.alignment: Qt.AlignRight 
+                                }
                                 Text { 
                                     text: cameraController.resolution
-                                    color: "#00b0ff"
-                                    font.pixelSize: 16; font.bold: true
+                                    color: "#00b0ff"; font.pixelSize: 14; font.bold: true
                                     Layout.alignment: Qt.AlignRight
                                 }
                             }
 
-                            // 3. Текущий и Средний FPS
                             ColumnLayout {
-                                Text { text: "CUR / AVG FPS"; color: "#888"; font.pixelSize: 12; font.bold: true }
+                                Text { text: "CUR / AVG FPS"; color: "#666"; font.pixelSize: 11; font.bold: true }
                                 RowLayout {
                                     Text {
                                         text: cameraController.currentFps.toFixed(1)
                                         color: cameraController.currentFps > 20 ? "#00e676" : "#ff3d00"
-                                        font.pixelSize: 24; font.bold: true
+                                        font.pixelSize: 20; font.bold: true
                                     }
-                                    Text { text: "/"; color: "#888"; font.pixelSize: 18 }
+                                    Text { text: "/"; color: "#444"; font.pixelSize: 16 }
                                     Text {
                                         text: cameraController.averageFps.toFixed(1)
-                                        color: "#ff9100"
-                                        font.pixelSize: 18; font.bold: true
+                                        color: "#ff9100"; font.pixelSize: 16; font.bold: true
                                     }
                                 }
                             }
 
-                            // 4. Заявленный FPS и Эффективность
                             ColumnLayout {
                                 Layout.alignment: Qt.AlignRight
-                                Text { text: "TARGET / EFFICIENCY"; color: "#888"; font.pixelSize: 12; font.bold: true; Layout.alignment: Qt.AlignRight }
+                                Text { 
+                                    // ИСПРАВЛЕНИЕ: Разрешаем перенос для длинного заголовка
+                                    text: "TARGET / EFFICIENCY"; color: "#666"; font.pixelSize: 11; 
+                                    font.bold: true; Layout.alignment: Qt.AlignRight;
+                                    wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignRight;
+                                    Layout.preferredWidth: 100
+                                }
                                 RowLayout {
                                     Layout.alignment: Qt.AlignRight
                                     Text {
                                         text: cameraController.targetFps.toFixed(1)
-                                        color: "#aaa"
-                                        font.pixelSize: 16; font.bold: true
+                                        color: "#888"; font.pixelSize: 14; font.bold: true
                                     }
-                                    Text { text: "|"; color: "#888"; font.pixelSize: 16 }
+                                    Text { text: "|"; color: "#444"; font.pixelSize: 14 }
                                     Text {
                                         text: cameraController.efficiency.toFixed(1) + "%"
-                                        color: cameraController.efficiency > 90 ? "#00e676" : (cameraController.efficiency > 50 ? "#ff9100" : "#ff3d00")
-                                        font.pixelSize: 18; font.bold: true
+                                        color: cameraController.efficiency > 90 ? "#00e676" : "#ff9100"
+                                        font.pixelSize: 16; font.bold: true
                                     }
                                 }
                             }
