@@ -35,7 +35,6 @@ if __name__ == "__main__":
     engine = QQmlApplicationEngine()
     
     # ВАЖНО: Регистрируем провайдер с именем "live"
-    # Теперь в QML можно писать source: "image://live/..."
     engine.addImageProvider("live", image_provider)
     
     # Пробрасываем контроллер в контекст QML
@@ -45,9 +44,12 @@ if __name__ == "__main__":
     qml_file = os.path.join(os.path.dirname(__file__), "main.qml")
     engine.load(QUrl.fromLocalFile(qml_file))    
 
-    # Проверка успешной загрузки корневого объекта
     if not engine.rootObjects():
         print("Error: Could not load main.qml")
         sys.exit(-1)
+        
+    # Гарантируем остановку отдельного потока камеры при закрытии приложения,
+    # чтобы не заблокировать USB-интерфейс (предотвращает зависания при следующем старте).
+    app.aboutToQuit.connect(camera_controller.stop_camera)
         
     sys.exit(app.exec())
