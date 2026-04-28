@@ -28,8 +28,8 @@ ApplicationWindow {
         anchors.fill: parent
         spacing: 0
 
-        // ЗОНА 1: ВЬЮВЕР (ВИДЕОПОТОК) 
-       
+        // === ЗОНА 1: ВЬЮВЕР (ВИДЕОПОТОК) 
+
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -61,9 +61,7 @@ ApplicationWindow {
             }
         }
 
-        
-        // ЗОНА 2: ПАНЕЛЬ УПРАВЛЕНИЯ 
-        
+        //  ЗОНА 2: ПАНЕЛЬ УПРАВЛЕНИЯ 
         Rectangle {
             Layout.preferredWidth: 380
             Layout.fillHeight: true
@@ -106,7 +104,7 @@ ApplicationWindow {
 
                     Rectangle { Layout.fillWidth: true; height: 1; color: "#333" }
 
-                    // УСИЛЕНИЕ / GAIN (Слайдер) 
+                    //  УСИЛЕНИЕ / GAIN (Слайдер) 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -131,7 +129,7 @@ ApplicationWindow {
                         }
                     }
 
-                    // ВЫДЕРЖКА / EXPOSURE (Слайдер) 
+                    //  ВЫДЕРЖКА / EXPOSURE (Слайдер) 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -154,7 +152,7 @@ ApplicationWindow {
                         }
                     }
 
-                    // БАЛАНС БЕЛОГО / WB RED (Слайдер + Тумблер) 
+                    //  БАЛАНС БЕЛОГО / WB RED (Слайдер + Тумблер) 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -198,7 +196,7 @@ ApplicationWindow {
                         }
                     }
 
-                    // ГАММА / GAMMA CONTRAST (Слайдер) 
+                    //  ГАММА / GAMMA CONTRAST (Слайдер) 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -223,7 +221,7 @@ ApplicationWindow {
 
                     Item { Layout.preferredHeight: 10 } 
 
-                    // БЛОК КНОПОК ПРЕСЕТОВ (RESET / LOAD / SAVE) 
+                    //  БЛОК КНОПОК ПРЕСЕТОВ (RESET / LOAD / SAVE) 
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -243,7 +241,7 @@ ApplicationWindow {
                         }
                     }
 
-                    // ГЛАВНЫЕ ДЕЙСТВИЯ (СНИМОК / ВИДЕО) 
+                    //  ГЛАВНЫЕ ДЕЙСТВИЯ (СНИМОК / ВИДЕО) 
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -290,7 +288,7 @@ ApplicationWindow {
                         }
                     }
 
-                    // БЛОК ТЕЛЕМЕТРИИ (FPS / РАЗРЕШЕНИЕ / ЭФФЕКТИВНОСТЬ) 
+                    //  БЛОК ТЕЛЕМЕТРИИ (FPS / РАЗРЕШЕНИЕ / ЭФФЕКТИВНОСТЬ) 
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 160
@@ -365,12 +363,13 @@ ApplicationWindow {
                         }
                     }
                 } 
-            } 
+            }
         } 
-    } /
+    }
 
     
-    // === СИСТЕМНЫЕ ДИАЛОГОВЫЕ ОКНА ===    
+    // СИСТЕМНЫЕ ДИАЛОГОВЫЕ ОКНА 
+    
     // Диалог сохранения фото (JPG / PNG)
     FileDialog {
         id: fileDialog
