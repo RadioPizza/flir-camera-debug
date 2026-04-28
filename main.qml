@@ -1,6 +1,6 @@
 /*
  * Main Interface (main.qml)
- * Исправлена компоновка полей и перенос текста в телеметрии
+ * Главный экран управления промышленной камерой.
  */
 
 import QtQuick
@@ -18,6 +18,7 @@ ApplicationWindow {
     height: 900
     color: "#121212"
 
+    // Применяем темную тему Material Design
     Material.theme: Material.Dark
     Material.accent: Material.LightGreen
 
@@ -27,7 +28,8 @@ ApplicationWindow {
         anchors.fill: parent
         spacing: 0
 
-        // === ЗОНА 1: ВИДЕОПОТОК ===
+        // ЗОНА 1: ВЬЮВЕР (ВИДЕОПОТОК) 
+       
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -37,11 +39,14 @@ ApplicationWindow {
                 id: camView
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectFit
+                // Привязка к провайдеру: при изменении cameraController.imagePath 
+                // изображение автоматически перезапрашивается
                 source: cameraController.imagePath
                 cache: false
                 asynchronous: false
             }
 
+            // Заглушка, отображаемая при выключенной камере
             Column {
                 anchors.centerIn: parent
                 visible: cameraController.status !== "Камера запущена"
@@ -56,12 +61,15 @@ ApplicationWindow {
             }
         }
 
-        // === ЗОНА 2: ПАНЕЛЬ УПРАВЛЕНИЯ ===
+        
+        // ЗОНА 2: ПАНЕЛЬ УПРАВЛЕНИЯ 
+        
         Rectangle {
             Layout.preferredWidth: 380
             Layout.fillHeight: true
             color: "#1e1e1e"
             
+            // Визуальный разделитель (рамка слева)
             Rectangle { 
                 width: 2; height: parent.height; 
                 color: "#333"; anchors.left: parent.left 
@@ -73,7 +81,6 @@ ApplicationWindow {
                 clip: true
 
                 ColumnLayout {
-                    // ИСПРАВЛЕНИЕ: Используем всю ширину ScrollView
                     width: parent.width 
                     spacing: 25
 
@@ -82,18 +89,14 @@ ApplicationWindow {
                         color: "#666"; font.pixelSize: 14; font.bold: true 
                     }
 
-                    // --- PIXEL FORMAT SELECTOR ---
+                    //  ФОРМАТ ПИКСЕЛЕЙ (ComboBox) 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 8
-                        Text { 
-                            text: "Формат пикселей"
-                            color: "white"; font.pixelSize: 16; font.bold: true 
-                        }
+                        Text { text: "Формат пикселей"; color: "white"; font.pixelSize: 16; font.bold: true }
                         
                         ComboBox {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 45
+                            Layout.fillWidth: true; Layout.preferredHeight: 45
                             model: ["Mono8 (Ч/Б Быстрый)", "RGB8 (Цвет Обработанный)", "BayerRG8 (RAW Цвет)"]
                             currentIndex: cameraController.pixelFormatIndex
                             font.pixelSize: 14
@@ -103,7 +106,7 @@ ApplicationWindow {
 
                     Rectangle { Layout.fillWidth: true; height: 1; color: "#333" }
 
-                    // --- SLIDER 1: GAIN ---
+                    // УСИЛЕНИЕ / GAIN (Слайдер) 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -112,7 +115,9 @@ ApplicationWindow {
                             Text { 
                                 text: "Усиление (Gain)"
                                 color: "white"; font.pixelSize: 16; font.bold: true
-                                Layout.fillWidth: true; elide: Text.ElideRight
+                                Layout.fillWidth: true
+                                // Защита от переполнения: длинный текст обрезается троеточием (...)
+                                elide: Text.ElideRight
                             }
                             Text { 
                                 text: cameraController.gainValue.toFixed(1) + " dB"
@@ -126,7 +131,7 @@ ApplicationWindow {
                         }
                     }
 
-                    // --- SLIDER 2: EXPOSURE ---
+                    // ВЫДЕРЖКА / EXPOSURE (Слайдер) 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -149,7 +154,7 @@ ApplicationWindow {
                         }
                     }
 
-                    // --- SLIDER 3: WHITE BALANCE (RED) ---
+                    // БАЛАНС БЕЛОГО / WB RED (Слайдер + Тумблер) 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -170,6 +175,7 @@ ApplicationWindow {
                         
                         RowLayout {
                             Layout.fillWidth: true
+                            // Визуальное затухание текста, когда включен АВТО-режим
                             opacity: cameraController.wbAuto ? 0.4 : 1.0
                             Text { 
                                 text: "Красный канал"
@@ -186,12 +192,13 @@ ApplicationWindow {
                         Slider {
                             Layout.fillWidth: true; Layout.preferredHeight: 32
                             from: 0.8; to: 3.0; value: cameraController.wbRedValue
+                            // Блокировка слайдера при активном АВТО-режиме
                             enabled: !cameraController.wbAuto
                             onMoved: cameraController.wbRedValue = value
                         }
                     }
 
-                    // --- SLIDER 4: GAMMA (CONTRAСТ) ---
+                    // ГАММА / GAMMA CONTRAST (Слайдер) 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -214,9 +221,9 @@ ApplicationWindow {
                         }
                     }
 
-                    Item { Layout.preferredHeight: 10 }
+                    Item { Layout.preferredHeight: 10 } 
 
-                    // --- CONFIG BUTTONS ---
+                    // БЛОК КНОПОК ПРЕСЕТОВ (RESET / LOAD / SAVE) 
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10
@@ -236,32 +243,54 @@ ApplicationWindow {
                         }
                     }
 
-                    // --- MAIN ACTIONS ---
-                    Button {
-                        text: "СНИМОК"
-                        Layout.fillWidth: true; Layout.preferredHeight: 55
-                        enabled: cameraController.status === "Камера запущена"
-                        onClicked: fileDialog.open()
-                        Material.background: Material.Blue
+                    // ГЛАВНЫЕ ДЕЙСТВИЯ (СНИМОК / ВИДЕО) 
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        
+                        Button {
+                            text: "СНИМОК"
+                            Layout.fillWidth: true; Layout.preferredHeight: 55
+                            enabled: cameraController.status === "Камера запущена" || cameraController.isRecording
+                            onClicked: fileDialog.open()
+                            Material.background: Material.Blue
+                        }
+                        
+                        Button {
+                            // Тернарный оператор: меняет текст и цвет в зависимости от статуса записи
+                            text: cameraController.isRecording ? "СТОП ЗАПИСЬ" : "ВИДЕО"
+                            Layout.fillWidth: true; Layout.preferredHeight: 55
+                            enabled: cameraController.status === "Камера запущена" || cameraController.isRecording
+                            
+                            onClicked: {
+                                if (cameraController.isRecording) {
+                                    cameraController.stop_video_recording()
+                                } else {
+                                    videoDialog.open()
+                                }
+                            }
+                            Material.background: cameraController.isRecording ? Material.DeepOrange : Material.Purple
+                        }
                     }
 
+                    // УПРАВЛЕНИЕ ПОТОКОМ (СТАРТ / СТОП) 
                     RowLayout {
                         Layout.fillWidth: true; spacing: 10
                         Button {
                             text: "СТАРТ"; Layout.fillWidth: true; Layout.preferredHeight: 55
-                            visible: cameraController.status !== "Камера запущена"
+                            visible: cameraController.status !== "Камера запущена" && !cameraController.isRecording
                             onClicked: cameraController.start_camera()
                             Material.background: Material.Green
                         }
                         Button {
                             text: "СТОП"; Layout.fillWidth: true; Layout.preferredHeight: 55
-                            visible: cameraController.status === "Камера запущена"
+                            visible: cameraController.status === "Камера запущена" || cameraController.isRecording
                             onClicked: cameraController.stop_camera()
                             Material.background: Material.Red
                         }
                     }
 
-                    // --- TELEMETRY ---
+                    // БЛОК ТЕЛЕМЕТРИИ (FPS / РАЗРЕШЕНИЕ / ЭФФЕКТИВНОСТЬ) 
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 160
@@ -298,6 +327,7 @@ ApplicationWindow {
                                 RowLayout {
                                     Text {
                                         text: cameraController.currentFps.toFixed(1)
+                                        // Индикация просадки кадров
                                         color: cameraController.currentFps > 20 ? "#00e676" : "#ff3d00"
                                         font.pixelSize: 20; font.bold: true
                                     }
@@ -312,9 +342,9 @@ ApplicationWindow {
                             ColumnLayout {
                                 Layout.alignment: Qt.AlignRight
                                 Text { 
-                                    // ИСПРАВЛЕНИЕ: Разрешаем перенос для длинного заголовка
                                     text: "TARGET / EFFICIENCY"; color: "#666"; font.pixelSize: 11; 
                                     font.bold: true; Layout.alignment: Qt.AlignRight;
+                                    // Динамический перенос строк для длинных заголовков
                                     wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignRight;
                                     Layout.preferredWidth: 100
                                 }
@@ -334,24 +364,40 @@ ApplicationWindow {
                             }
                         }
                     }
-                }
-            }
-        }
-    }
+                } 
+            } 
+        } 
+    } /
 
+    
+    // === СИСТЕМНЫЕ ДИАЛОГОВЫЕ ОКНА ===    
+    // Диалог сохранения фото (JPG / PNG)
     FileDialog {
         id: fileDialog
         title: "Сохранить кадр"
-        fileMode: FileDialog.SaveFile  // <--- ПЕРЕВОДИМ В РЕЖИМ СОХРАНЕНИЯ
+        fileMode: FileDialog.SaveFile
         nameFilters: ["JPEG Image (*.jpg)", "PNG Image (*.png)"]
         defaultSuffix: "jpg"
         currentFolder: StandardPaths.standardLocations(StandardPaths.PicturesLocation)[0]
-        
         onAccepted: {
             var url = selectedFile.toString()
-            // Автоматическое определение формата по расширению
             var fmt = url.toLowerCase().endsWith(".png") ? "PNG" : "JPEG"
             cameraController.capture_photo(url, fmt, 95)
+        }
+    }
+
+    // Диалог сохранения видео (MP4 / AVI)
+    FileDialog {
+        id: videoDialog
+        title: "Сохранить видео"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["MP4 Video (*.mp4)", "AVI Video (*.avi)"]
+        defaultSuffix: "mp4"
+        currentFolder: StandardPaths.standardLocations(StandardPaths.MoviesLocation)[0]
+        onAccepted: {
+            var url = selectedFile.toString()
+            var fmt = url.toLowerCase().endsWith(".avi") ? "avi" : "mp4"
+            cameraController.start_video_recording(url, fmt)
         }
     }
 }

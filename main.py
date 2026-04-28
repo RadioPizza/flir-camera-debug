@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Main Application Entry Point.
-
-Инициализация Qt приложения, регистрация провайдера изображений (ImageProvider)
-и запуск основного цикла событий.
+Точка входа в приложение.
 """
 
 import sys
@@ -13,43 +10,38 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtCore import QUrl
 
-# Импортируем контроллер и класс провайдера
 from CameraController import CameraController, LiveImageProvider
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     
-    # 1. Создаем провайдер изображений (Zero-Copy механизм)
+    # Создаем провайдер для передачи кадров из Python в QML без копирования памяти (Zero-Copy).
     image_provider = LiveImageProvider()
     
-    # 2. Создаем контроллер и передаем ему провайдер
+    # Создаем главный объект управления камерой и связываем его с провайдером.
     try:
         camera_controller = CameraController()
         camera_controller.set_image_provider(image_provider)
     except Exception as e:
-        print(f"Critical Initialization Error: {e}")
+        print(f"Критическая ошибка инициализации контроллера: {e}")
         sys.exit(-1)
 
-    # 3. Настраиваем движок QML
     engine = QQmlApplicationEngine()
     
-    # ВАЖНО: Регистрируем провайдер с именем "live"
+    # Регистрируем провайдер под именем "live". 
     engine.addImageProvider("live", image_provider)
     
-    # Пробрасываем контроллер в контекст QML
+    # Пробрасываем объект camera_controller в глобальный контекст QML.
     engine.rootContext().setContextProperty("cameraController", camera_controller)
     
-    # Загружаем интерфейс
     qml_file = os.path.join(os.path.dirname(__file__), "main.qml")
     engine.load(QUrl.fromLocalFile(qml_file))    
 
     if not engine.rootObjects():
-        print("Error: Could not load main.qml")
+        print("Ошибка: Не удалось загрузить main.qml")
         sys.exit(-1)
         
-    # Гарантируем остановку отдельного потока камеры при закрытии приложения,
-    # чтобы не заблокировать USB-интерфейс (предотвращает зависания при следующем старте).
+    # Гарантируем остановку отдельного потока камеры при закрытии окна,
     app.aboutToQuit.connect(camera_controller.stop_camera)
         
     sys.exit(app.exec())

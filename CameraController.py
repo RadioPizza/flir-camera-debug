@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Camera Controller Module for FLIR Blackfly S.   
+Модуль контроллера камеры FLIR Blackfly S.
 """
 
 import os
@@ -21,13 +21,12 @@ from PySide6.QtGui import QImage, QColor
 from PySide6.QtQuick import QQuickImageProvider
 
 
-# --- LOGGING SETUP ---
 def setup_logger():
+    """Настройка системы логирования с ротацией файлов (ограничение размера лога)."""
     logger = logging.getLogger("FLIR_System")
     logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-    )
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s')
+    
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
@@ -46,7 +45,10 @@ logger = setup_logger()
 
 
 class LiveImageProvider(QQuickImageProvider):
-    """Zero-Copy Image Provider для передачи кадров в QML."""
+    """
+    Провайдер изображений для QML. 
+    Использует QMutex для защиты разделяемой памяти между потоком камеры и потоком GUI.
+    """
     def __init__(self):
         super().__init__(QQuickImageProvider.ImageType.Image)
         self._current_image = QImage(800, 600, QImage.Format_RGB888)
@@ -54,42 +56,55 @@ class LiveImageProvider(QQuickImageProvider):
         self.mutex = QMutex()
 
     def requestImage(self, id, size, requestedSize):
+        """Вызывается QML-движком при обновлении источника (source)."""
         with QMutexLocker(self.mutex):
             return self._current_image
             
     def update_image(self, image):
+        """Вызывается из CameraController для загрузки нового кадра."""
         with QMutexLocker(self.mutex):
             if not image.isNull():
                 self._current_image = image
 
 
 class CameraWorker(QThread):
-    """Backend Worker: управляет аппаратной частью камеры в отдельном потоке."""
+    """
+    Рабочий поток для взаимодействия с SDK Spinnaker (PySpin).
+    Инкапсулирует всю логику работы с железом, чтобы не блокировать GUI.
+    """
+    # Сигналы для общения с контроллером 
     frame_ready = Signal(QImage)
     status_changed = Signal(str)
     error_occurred = Signal(str)
     metrics_updated = Signal(float, float, float, float)
     resolution_updated = Signal(str)
-    wb_red_calculated = Signal(float) # Сигнал для обновления ползунка АВТО
+    wb_red_calculated = Signal(float)
 
     def __init__(self):
         super().__init__()
         self.camera = None
         self.system = None
         self.running = False
+        self._lock = QMutex() 
         
-        # Ручные параметры сенсора
+        # Параметры сенсора по умолчанию
         self.exposure_time = 20000.0
         self.gain = 10.0
         self.wb_red = 1.20
         self.gamma = 1.0
         self.wb_auto = False
         self.pixel_format_str = "BayerRG8"
-        
         self.packet_size = 9000
-        self._lock = QMutex() 
+        
+        # Параметры подсистемы записи видео
+        self._video_lock = QMutex()
+        self.is_recording = False
+        self.video_writer = None
+        self.record_path = ""
+        self.record_fps = 30.0
 
     def run(self):
+        """Главный цикл захвата кадров (выполняется в отдельном потоке)."""
         try:
             self.system = PySpin.System.GetInstance()
             cam_list = self.system.GetCameras()
@@ -103,8 +118,10 @@ class CameraWorker(QThread):
             self.camera = cam_list.GetByIndex(0)
             self.camera.Init()
             
+            # Применяем конфигурацию перед стартом потока
             self._apply_initial_settings()
             
+            # Считывание эталонных метрик камеры
             target_fps = 0.0
             try:
                 nodemap = self.camera.GetNodeMap()
@@ -117,12 +134,13 @@ class CameraWorker(QThread):
                 if PySpin.IsAvailable(fps_node):
                     target_fps = fps_node.GetValue()
             except Exception as e:
-                logger.warning(f"Failed to read sensor metrics: {e}")
+                logger.warning(f"Ошибка чтения метрик сенсора: {e}")
 
             self.camera.BeginAcquisition()
             self.status_changed.emit("Камера запущена")
             self.running = True
             
+            # Счетчики для телеметрии
             fps_counter = 0
             total_frames = 0
             start_time = time.time()
@@ -132,11 +150,13 @@ class CameraWorker(QThread):
                 with QMutexLocker(self._lock):
                     if not self.running: break
                     try:
+                        # Получение сырого кадра из буфера
                         image_result = self.camera.GetNextImage(1000)
                         if image_result.IsIncomplete():
                             image_result.Release()
                             continue
 
+                        # Конвертация и обработка (AWB, Видеозапись)
                         qimage = self._convert_to_qimage(image_result)
                         if not qimage.isNull():
                             self.frame_ready.emit(qimage)
@@ -147,6 +167,7 @@ class CameraWorker(QThread):
                     except Exception as e:
                         continue
 
+                # Обновление телеметрии каждую секунду
                 current_time = time.time()
                 if current_time - fps_timer >= 1.0:
                     current_fps = fps_counter / (current_time - fps_timer)
@@ -159,12 +180,13 @@ class CameraWorker(QThread):
                     fps_timer = current_time
 
         except Exception as e:
-            logger.critical(f"Critical Worker Crash: {e}", exc_info=True)
+            logger.critical(f"Критический сбой потока камеры: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
         finally:
             self._cleanup()
 
     def _apply_initial_settings(self):
+        """Запись стартовых параметров в регистры камеры."""
         try:
             try:
                 nodemap = self.camera.GetTLStreamNodeMap()
@@ -178,11 +200,10 @@ class CameraWorker(QThread):
             self.set_gain(self.gain)
             self.set_gamma(self.gamma)
             
-            # Если автобаланс выключен - применяем ручные настройки
             if not self.wb_auto:
                 self.set_wb_red(self.wb_red)
                 
-            # Аппаратный автобаланс всегда выключаем, так как используем свой алгоритм
+            # Принудительно отключаем встроенный AWB камеры
             try:
                 nodemap = self.camera.GetNodeMap()
                 wb_auto = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceWhiteAuto"))
@@ -191,35 +212,39 @@ class CameraWorker(QThread):
             except: pass
             
         except Exception as e:
-            logger.error(f"Setup Error: {e}")
+            logger.error(f"Ошибка настройки параметров: {e}")
 
     def _convert_to_qimage(self, image_result):
+        """
+        Математическое ядро потока.
+        Выполняет конвертацию RAW -> RGB, гибридный баланс белого и запись видео.
+        """
         try:
             image_data = image_result.GetNDArray()
             current_format = image_result.GetPixelFormat() 
             rgb = None
             
+            # Дебайеризация и корректировка каналов
             if current_format == PySpin.PixelFormat_Mono8:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2RGB)
             elif current_format == PySpin.PixelFormat_BayerRG8:
+                # ВНИМАНИЕ: Используется BayerRG2BGR для исправления Red/Blue swap
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_BayerRG2BGR)
             elif current_format == PySpin.PixelFormat_RGB8:
                 rgb = image_data
             else:
                 rgb = cv2.cvtColor(image_data, cv2.COLOR_GRAY2RGB) if len(image_data.shape) == 2 else image_data
 
-            
-            # === ГИБРИДНЫЙ АВТОБАЛАНС БЕЛОГО ===
+            # ГИБРИДНЫЙ АВТОБАЛАНС БЕЛОГО
             if hasattr(self, 'wb_auto') and self.wb_auto:
                 current_time = time.time()
                 if not hasattr(self, '_last_awb_time'):
                     self._last_awb_time = 0
                     
+                # Анализируем кадр каждые 1.5 секунды для экономии CPU
                 if current_time - self._last_awb_time > 1.5:
                     self._last_awb_time = current_time
                     
-                    # ИСПРАВЛЕНИЕ: Индексы массива физически соответствуют RGB 
-                    # (0-Red, 1-Green, 2-Blue), так как мы инвертировали их ранее для QImage
                     avg_r = float(np.mean(rgb[:, :, 0]))
                     avg_g = float(np.mean(rgb[:, :, 1]))
                     avg_b = float(np.mean(rgb[:, :, 2]))
@@ -230,38 +255,73 @@ class CameraWorker(QThread):
                             ratio_node = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
                             selector = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceRatioSelector"))
                             
-                            # Вычисляем и применяем Красный канал
+                            # Расчет коэффициентов с учетом 50% демпфирования (плавности)
                             selector.SetIntValue(selector.GetEntryByName("Red").GetValue())
                             current_red = ratio_node.GetValue()
                             target_red = current_red * (avg_g / avg_r)
+                            new_red = current_red * 0.5 + target_red * 0.5
                             
-                            # Вычисляем и применяем Синий канал
                             selector.SetIntValue(selector.GetEntryByName("Blue").GetValue())
                             current_blue = ratio_node.GetValue()
                             target_blue = current_blue * (avg_g / avg_b)
-                            
-                            # Демпфирование для плавности перехода (50%)
-                            new_red = current_red * 0.5 + target_red * 0.5
                             new_blue = current_blue * 0.5 + target_blue * 0.5
                             
-                            # Запись в регистры камеры
+                            # Применение параметров аппаратно
                             selector.SetIntValue(selector.GetEntryByName("Red").GetValue())
                             ratio_node.SetValue(min(ratio_node.GetMax(), max(ratio_node.GetMin(), new_red)))
                             
                             selector.SetIntValue(selector.GetEntryByName("Blue").GetValue())
                             ratio_node.SetValue(min(ratio_node.GetMax(), max(ratio_node.GetMin(), new_blue)))
                             
-                            # Отправляем обновленное значение красного канала в UI для ползунка
+                            # Уведомляем UI об изменении
                             self.wb_red_calculated.emit(new_red)
                         except Exception as e:
                             pass
 
+            # ПОТОКОВАЯ ЗАПИСЬ ВИДЕО НА ДИСК
+            with QMutexLocker(self._video_lock):
+                if self.is_recording:
+                    if self.video_writer is None:
+                        h, w = rgb.shape[:2]
+                        # Маршрутизация кодека в зависимости от контейнера
+                        if hasattr(self, 'record_fmt') and self.record_fmt == 'avi':
+                            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                        else:
+                            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                            
+                        self.video_writer = cv2.VideoWriter(self.record_path, fourcc, self.record_fps, (w, h))
+                        logger.info(f"Video stream opened: {w}x{h} @ {self.record_fps} FPS, Codec: {self.record_fmt}")
+                    
+                    if self.video_writer and self.video_writer.isOpened():
+                        self.video_writer.write(rgb)
+
+            # Сборка QImage для UI
             h, w, ch = rgb.shape
             bytes_per_line = ch * w
             img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
             return img.copy()
         except Exception as e:
             return QImage()
+
+    # МЕТОДЫ УПРАВЛЕНИЯ ПАРАМЕТРАМИ 
+    
+    def start_recording(self, path, fps, fmt):
+        """Инициализация флагов записи видео."""
+        with QMutexLocker(self._video_lock):
+            self.record_path = path
+            self.record_fps = fps
+            self.record_fmt = fmt
+            self.is_recording = True
+            self.video_writer = None 
+
+    def stop_recording(self):
+        """Безопасное закрытие видеофайла."""
+        with QMutexLocker(self._video_lock):
+            self.is_recording = False
+            if self.video_writer:
+                self.video_writer.release()
+                self.video_writer = None
+                logger.info("Видеопоток закрыт и сохранен.")
 
     def set_pixel_format(self, format_name, force_restart=True):
         if not self.camera: return
@@ -331,6 +391,8 @@ class CameraWorker(QThread):
             except: pass
 
     def _cleanup(self):
+        """Освобождение аппаратных ресурсов при остановке потока."""
+        self.stop_recording()
         if self.camera:
             try:
                 if self.camera.IsStreaming():
@@ -347,7 +409,11 @@ class CameraWorker(QThread):
 
 
 class CameraController(QObject):
-    """UI Controller: Связывает QML интерфейс с CameraWorker."""
+    """
+    Интерфейсный контроллер. 
+    Определяет Properties (Свойства) и Slots (Методы), которые можно вызывать из QML.
+    """
+    # СИГНАЛЫ ДЛЯ ОБНОВЛЕНИЯ UI 
     frameChanged = Signal()
     statusChanged = Signal()
     imagePathChanged = Signal()
@@ -362,9 +428,11 @@ class CameraController(QObject):
     wbAutoChanged = Signal()
     pixelFormatChanged = Signal()
     gammaChanged = Signal()
+    isRecordingChanged = Signal() 
 
     def __init__(self):
         super().__init__()
+        # Внутреннее состояние системы
         self._status = "Готов"
         self._image_path = ""
         self._currentFps = 0.0
@@ -372,15 +440,17 @@ class CameraController(QObject):
         self._targetFps = 0.0
         self._efficiency = 0.0
         self._resolution = "Неизвестно"
+        self._is_recording = False 
         
         self.FORMAT_MAP = {0: "Mono8", 1: "RGB8", 2: "BayerRG8"}
         
+        # Настройки по умолчанию
         self.DEFAULT_CONFIG = {
             "exposure": 20000.0,
             "gain": 10.0,
             "wb_red": 1.20,
             "gamma": 1.0,
-            "wb_auto": True, # АВТО включено по умолчанию
+            "wb_auto": True,
             "pixel_format_idx": 2 
         }
         
@@ -398,13 +468,34 @@ class CameraController(QObject):
     def set_image_provider(self, provider):
         self.provider = provider
 
+    # ПРИВЯЗКИ (PROPERTIES) ДЛЯ QML 
     @Property(str, notify=imagePathChanged)
     def imagePath(self): return self._image_path
 
+    @Property(bool, notify=isRecordingChanged)
+    def isRecording(self): return self._is_recording
+
+    @Property(str, notify=statusChanged)
+    def status(self): return self._status
+    @Property(float, notify=currentFpsChanged)
+    def currentFps(self): return self._currentFps
+    @Property(float, notify=averageFpsChanged)
+    def averageFps(self): return self._averageFps
+    @Property(float, notify=targetFpsChanged)
+    def targetFps(self): return self._targetFps
+    @Property(float, notify=efficiencyChanged)
+    def efficiency(self): return self._efficiency
+    @Property(str, notify=resolutionChanged)
+    def resolution(self): return self._resolution
+
+    # УПРАВЛЕНИЕ КАМЕРОЙ 
     @Slot()
     def start_camera(self):
+        """Запуск рабочего потока камеры."""
         if self.worker and self.worker.isRunning(): return
         self.worker = CameraWorker()
+        
+        # Передача текущих настроек в воркер
         self.worker.exposure_time = self._exposure_value
         self.worker.gain = self._gain_value
         self.worker.wb_red = self._wb_red_value
@@ -412,24 +503,75 @@ class CameraController(QObject):
         self.worker.wb_auto = self._wb_auto
         self.worker.pixel_format_str = self.FORMAT_MAP.get(self._pixel_format_index, "BayerRG8")
         
+        # Подключение сигналов от воркера
         self.worker.frame_ready.connect(self._on_frame_ready)
         self.worker.status_changed.connect(self._update_status)
         self.worker.metrics_updated.connect(self._on_metrics_updated)
         self.worker.resolution_updated.connect(self._on_resolution_updated)
-        self.worker.wb_red_calculated.connect(self._on_wb_red_calculated) # Подключаем новый сигнал
+        self.worker.wb_red_calculated.connect(self._on_wb_red_calculated)
+        
         self.worker.start()
 
     @Slot()
     def stop_camera(self):
+        """Остановка рабочего потока."""
         if self.worker:
             self.worker.stop()
             self.worker = None
+            self._is_recording = False
+            self.isRecordingChanged.emit()
             self._update_status("Остановлено")
             self._on_metrics_updated(0.0, 0.0, 0.0, 0.0)
 
+    # ЗАПИСЬ ВИДЕО И СОХРАНЕНИЕ КАДРОВ 
+    @Slot(str, str)
+    def start_video_recording(self, file_url, fmt):
+        """Запускает сохранение кадров в видеофайл."""
+        if not self.worker: return
+        path = QUrl(file_url).toLocalFile()
+        if not path:
+            path = file_url.replace("file:///", "").replace("file://", "")
+        
+        fps = self._targetFps if self._targetFps > 0 else 38.0
+        
+        self.worker.start_recording(path, fps, fmt.lower())
+        self._is_recording = True
+        self.isRecordingChanged.emit()
+        self._update_status("ИДЕТ ЗАПИСЬ...")
+
+    @Slot()
+    def stop_video_recording(self):
+        """Останавливает видеозапись."""
+        if not self.worker: return
+        self.worker.stop_recording()
+        self._is_recording = False
+        self.isRecordingChanged.emit()
+        self._update_status("Камера запущена")
+
+    @Slot(str, str, int)
+    def capture_photo(self, file_url, fmt, q):
+        """Копирует последний кадр из провайдера и сохраняет на диск."""
+        path = QUrl(file_url).toLocalFile()
+        if not path:
+            path = file_url.replace("file:///", "").replace("file://", "")
+
+        if self.provider:
+            # Безопасное копирование данных (Zero-Copy защита)
+            with QMutexLocker(self.provider.mutex):
+                img = self.provider._current_image.copy()
+            
+            if not img.isNull():
+                success = img.save(path, fmt.upper(), q)
+                if success:
+                    self._update_status("Снимок сохранен")
+                else:
+                    self._update_status("Ошибка сохранения")
+
+    # ОБРАБОТЧИКИ СИГНАЛОВ (CALLBACKS) 
     def _on_frame_ready(self, qimage):
         if self.provider:
             self.provider.update_image(qimage)
+            # Обновление пути заставляет QML перерисовать Image
             self._image_path = f"image://live/frame_{time.time()}"
             self.imagePathChanged.emit()
 
@@ -452,23 +594,10 @@ class CameraController(QObject):
         self.resolutionChanged.emit()
         
     def _on_wb_red_calculated(self, val):
-        """Слот: обновляет UI при авторасчете баланса белого"""
         self._wb_red_value = val
         self.wbRedChanged.emit()
 
-    @Property(str, notify=statusChanged)
-    def status(self): return self._status
-    @Property(float, notify=currentFpsChanged)
-    def currentFps(self): return self._currentFps
-    @Property(float, notify=averageFpsChanged)
-    def averageFps(self): return self._averageFps
-    @Property(float, notify=targetFpsChanged)
-    def targetFps(self): return self._targetFps
-    @Property(float, notify=efficiencyChanged)
-    def efficiency(self): return self._efficiency
-    @Property(str, notify=resolutionChanged)
-    def resolution(self): return self._resolution
-
+    # СЕТТЕРЫ И ГЕТТЕРЫ ДЛЯ ПОЛЗУНКОВ ИЗ QML 
     @Property(float, notify=gainChanged)
     def gainValue(self): return self._gain_value
     @gainValue.setter
@@ -514,7 +643,6 @@ class CameraController(QObject):
             self._wb_auto = val
             if self.worker: 
                 self.worker.wb_auto = val
-                # При отключении авто - фиксируем последнее вычисленное значение в железо
                 if not val:
                     self.worker.set_wb_red(self._wb_red_value)
             self.wbAutoChanged.emit()
@@ -528,8 +656,10 @@ class CameraController(QObject):
             if self.worker: self.worker.set_pixel_format(self.FORMAT_MAP.get(val, "Mono8"))
             self.pixelFormatChanged.emit()
 
+    # УПРАВЛЕНИЕ КОНФИГУРАЦИЕЙ (ПРЕСЕТАМИ) 
     @Slot()
     def reset_defaults(self):
+        """Возврат параметров к заводским (DEFAULT_CONFIG)."""
         self.exposureValue = self.DEFAULT_CONFIG["exposure"]
         self.gainValue = self.DEFAULT_CONFIG["gain"]
         self.wbRedValue = self.DEFAULT_CONFIG["wb_red"]
@@ -540,6 +670,7 @@ class CameraController(QObject):
 
     @Slot()
     def save_preset(self):
+        """Сохранение текущего состояния ползунков в JSON."""
         config = {
             "exposure": self._exposure_value, "gain": self._gain_value,
             "wb_red": self._wb_red_value, "pixel_format_idx": self._pixel_format_index,
@@ -552,6 +683,7 @@ class CameraController(QObject):
 
     @Slot()
     def load_preset(self):
+        """Загрузка состояния ползунков из JSON."""
         if not os.path.exists(self.CONFIG_FILE): return
         try:
             with open(self.CONFIG_FILE, 'r') as f: config = json.load(f)
@@ -563,27 +695,3 @@ class CameraController(QObject):
             self.gammaValue = config.get("gamma", self._gamma_value)
             self._update_status("Пресет загружен")
         except: pass
-
-    @Slot(str, str, int)
-    def capture_photo(self, file_url, fmt, q):
-        # Безопасная кроссплатформенная конвертация URL в системный путь
-        path = QUrl(file_url).toLocalFile()
-        if not path:
-            path = file_url.replace("file:///", "").replace("file://", "")
-
-        if self.provider:
-            # Блокируем мьютекс только на время копирования кадра в память,
-            # чтобы не задерживать видеопоток (Zero-Copy защита)
-            with QMutexLocker(self.provider.mutex):
-                img = self.provider._current_image.copy()
-            
-            if not img.isNull():
-                success = img.save(path, fmt.upper(), q)
-                if success:
-                    logger.info(f"Снимок сохранен: {path}")
-                    self._update_status("Снимок сохранен")
-                else:
-                    logger.error(f"Ошибка записи: {path}")
-                    self._update_status("Ошибка сохранения")
-            else:
-                self._update_status("Нет кадра")
